@@ -1,0 +1,4 @@
+split,n_rows,n_duplicates_qid,n_answerable,n_unanswerable,qtype_counts,votes_zero,votes_low,votes_wilson_applicable,n_categories,median_n_snippets,median_n_answers
+train,738776,0,455931,282845,"{""descriptive"": 628400, ""yesno"": 110376}",371391,279145,88240,17,10.0,3.0
+val,92183,0,58969,33214,"{""descriptive"": 78416, ""yesno"": 13767}",46309,34921,10953,17,10.0,3.0
+test,92726,0,59527,33199,"{""descriptive"": 78831, ""yesno"": 13895}",46445,35240,11041,17,10.0,3.0

@@ -1,0 +1,36 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+#logs
+logs/
+*.log
+
+# .env files
+.env
+
+# Cache
+.cache/
+
+# Data (raw + intermediate; keep small processed CSVs in repo if you want)
+datasets/raw/*.jsonl
+datasets/raw/*.json
+datasets/processed/std_*.csv
+datasets/processed/combined_amazonqa.csv
+datasets/indexes/
+!datasets/raw/.gitkeep
+!datasets/processed/.gitkeep
+!datasets/indexes/.gitkeep
+
+# Outputs
+outputs/eda_plots/*
+!outputs/eda_plots/.gitkeep
+outputs/refusal_validation_set.csv
+
