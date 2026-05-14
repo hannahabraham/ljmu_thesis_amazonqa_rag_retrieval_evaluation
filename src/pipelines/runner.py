@@ -1,27 +1,29 @@
 """Per-pipeline cell runner.
 
-`run_pipeline_cell(pipeline, k, sample)` performs the full per-cell flow:
+`run_pipeline_cell(pipeline, k, sample, seed)` performs the full per-cell flow:
 
   1. Retrieval over the golden questions
        → outputs/<pipeline>/retrieval_k<k>.csv
   2. Generation via Groq
        → outputs/<pipeline>/answers_k<k>.csv
-  3. Per-cell evaluation across:
+  3. Per-question JSONL (v5 source of truth, consumed by the table builders)
+       → outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl
+  4. Per-cell evaluation across:
        Retrieval     : Hit@K, Recall@K, MRR, nDCG@K
        Answer quality: Exact Match, F1, ROUGE-L, Semantic Similarity
        Faithfulness  : (lexical) Groundedness, Hallucination Rate
-                       — RAGAS Faithfulness Score is merged separately by 24
        Efficiency    : Avg Latency, Retrieval Latency
        Robustness    : Answerability Accuracy, Long-Context Accuracy,
                        Noise-Robust F1, Clean-vs-Noisy F1 delta
        → outputs/<pipeline>/metrics_k<k>.csv  (one-row metric snapshot)
-  4. Upsert one row into:
+  5. Upsert one row into:
        outputs/<pipeline>/summary.csv         (this pipeline's k-sweep)
-       outputs/results.csv                    (cross-pipeline summary)
+       outputs/results.csv                    (legacy cross-pipeline summary)
 
 RAGAS Faithfulness / Context Precision / Context Recall are NOT computed here;
-they come from scripts/18_eval_ragas.py and are merged into results.csv by
-scripts/24_build_results_table.py.
+they come from scripts/18_eval_ragas.py, which writes per-row scores back into
+the per-question JSONL. The v5 Results Sheet tables are assembled from the JSONL
+by scripts/24_build_results_tables.py.
 """
 from __future__ import annotations
 
@@ -207,8 +209,12 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
     pending_prompts: list[str] = []
     for i, prompt in enumerate(prompts):
         hit = get_cached("groq_rag", prompt, GROQ_MODEL)
-        if hit is not None and isinstance(hit, dict) and "generated_answer" in hit:
-            cached_answers.append(hit["generated_answer"])
+        generated_answer = ""
+        if hit is not None and isinstance(hit, dict):
+            generated_answer = str(hit.get("generated_answer") or "").strip()
+
+        if generated_answer:
+            cached_answers.append(generated_answer)
             cached_latency.append(float(hit.get("generation_ms", 0.0)))
         else:
             cached_answers.append(None)
@@ -230,13 +236,15 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
         )
         live_answers, live_latency = client.batch_invoke(pending_prompts)
         for i, ans, ms in zip(pending_idx, live_answers, live_latency):
-            cached_answers[i] = ans or ""
+            generated_answer = str(ans or "").strip()
+            cached_answers[i] = generated_answer
             cached_latency[i] = ms
-            set_cached(
-                "groq_rag",
-                {"generated_answer": cached_answers[i], "generation_ms": ms},
-                prompts[i], GROQ_MODEL,
-            )
+            if generated_answer:
+                set_cached(
+                    "groq_rag",
+                    {"generated_answer": generated_answer, "generation_ms": ms},
+                    prompts[i], GROQ_MODEL,
+                )
 
     rows: list[dict[str, Any]] = []
     for i, (_, r) in enumerate(retrieval_df.iterrows()):
@@ -272,7 +280,7 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
 
     Returns a dict keyed by `RESULTS_COLUMNS` headers (where applicable). RAGAS
     Faithfulness / Context Precision / Context Recall are intentionally left out
-    of the dict — they're merged in by scripts/24_build_results_table.py.
+    of the dict — they come from scripts/18_eval_ragas.py.
     """
     df = answers_df.copy()
     df["retrieved_doc_ids"] = df["retrieved_doc_ids"].apply(parse_list_field)
@@ -424,10 +432,12 @@ def _upsert_pipeline_summary(pipeline: str, k: int, metrics: dict[str, Any]) -> 
 
 
 def upsert_results_row(pipeline: str, k: int, metrics: dict[str, Any]) -> None:
-    """Upsert the cross-pipeline outputs/results.csv row for (pipeline, k).
+    """Upsert the legacy cross-pipeline outputs/results.csv row for (pipeline, k).
 
-    Faithfulness / Context Precision / Context Recall are left blank — they get
-    merged in by scripts/24_build_results_table.py once RAGAS has run.
+    Faithfulness / Context Precision / Context Recall are left blank here. The
+    v5 Results Sheet tables come from the per-question JSONL via
+    scripts/24_build_results_tables.py; this CSV is kept as a quick-glance
+    cross-pipeline snapshot only.
     """
     path = OUTPUT_DIR / "results.csv"
     new_row = {

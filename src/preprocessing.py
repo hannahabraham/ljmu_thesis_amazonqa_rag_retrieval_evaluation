@@ -1,89 +1,134 @@
-"""Standardize raw AmazonQA splits to a common schema."""
+"""Standardise raw AmazonQA splits to a common schema."""
+
 from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 import pandas as pd
 
 from src.utils.io import parse_list_field
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 LIST_FIELDS = (
-    "review_snippets", "top_sentences_IR",
-    "top_review_helpful", "top_review_wilson",
+    "review_snippets",
+    "top_sentences_IR",
+    "top_review_helpful",
+    "top_review_wilson",
     "answers",
 )
 
 _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
-def _strip_surrogates(value: object) -> object:
-    """Recursively remove lone unicode surrogates so UTF-8 writers don't choke."""
+def _strip_surrogates(value: Any) -> Any:
+    """Recursively remove lone Unicode surrogates."""
     if isinstance(value, str):
         return _SURROGATE_RE.sub("", value)
+
     if isinstance(value, dict):
-        return {k: _strip_surrogates(v) for k, v in value.items()}
+        return {
+            key: _strip_surrogates(item)
+            for key, item in value.items()
+        }
+
     if isinstance(value, list):
-        return [_strip_surrogates(v) for v in value]
+        return [
+            _strip_surrogates(item)
+            for item in value
+        ]
+
     if isinstance(value, tuple):
-        return tuple(_strip_surrogates(v) for v in value)
+        return tuple(
+            _strip_surrogates(item)
+            for item in value
+        )
+
     return value
 
 
 def _normalise_answerability(value: object) -> int | None:
-    """Map various truthy/falsey representations to 0/1; None for unknown."""
+    """Map common answerability values to 0 or 1."""
     if value is None:
         return None
+
     if isinstance(value, bool):
         return int(value)
+
     if isinstance(value, (int, float)):
         if pd.isna(value):
             return None
         return int(bool(value))
+
     text = str(value).strip().lower()
-    if text in ("1", "true", "yes", "y", "answerable"):
+
+    if text in {"1", "true", "yes", "y", "answerable"}:
         return 1
-    if text in ("0", "false", "no", "n", "unanswerable"):
+
+    if text in {"0", "false", "no", "n", "unanswerable"}:
         return 0
+
     return None
 
 
-def standardize_split(df: pd.DataFrame, source_file: str) -> pd.DataFrame:
-    """Parse list fields, normalise answerability, lowercase questionType, derive counts."""
-    out = df.copy()
-    out["source_file"] = source_file
+def standardize_split(
+    dataframe: pd.DataFrame,
+    source_file: str,
+) -> pd.DataFrame:
+    """Standardise one raw AmazonQA split."""
+    output = dataframe.copy()
+    output["source_file"] = source_file
 
-    for field in LIST_FIELDS:
-        if field in out.columns:
-            out[field] = out[field].apply(parse_list_field)
+    for field_name in LIST_FIELDS:
+        if field_name in output.columns:
+            output[field_name] = output[field_name].apply(
+                parse_list_field
+            )
         else:
-            out[field] = [[] for _ in range(len(out))]
+            output[field_name] = [
+                []
+                for _ in range(len(output))
+            ]
 
-    if "is_answerable" in out.columns:
-        out["is_answerable"] = out["is_answerable"].apply(_normalise_answerability)
+    if "is_answerable" in output.columns:
+        output["is_answerable"] = output["is_answerable"].apply(
+            _normalise_answerability
+        )
     else:
-        out["is_answerable"] = None
+        output["is_answerable"] = None
 
-    if "questionType" in out.columns:
-        out["questionType"] = out["questionType"].astype(str).str.lower().str.strip()
+    if "questionType" in output.columns:
+        output["questionType"] = (
+            output["questionType"]
+            .astype(str)
+            .str.lower()
+            .str.strip()
+        )
     else:
-        out["questionType"] = "unknown"
+        output["questionType"] = "unknown"
 
-    out["n_answers"] = out["answers"].apply(len)
-    out["n_snippets"] = out["review_snippets"].apply(len)
+    output["n_answers"] = output["answers"].apply(len)
+    output["n_snippets"] = output["review_snippets"].apply(len)
 
-    if "category" in out.columns:
-        out["category"] = out["category"].fillna("unknown").astype(str)
+    if "category" in output.columns:
+        output["category"] = (
+            output["category"]
+            .fillna("unknown")
+            .astype(str)
+            .str.strip()
+        )
     else:
-        out["category"] = "unknown"
+        output["category"] = "unknown"
 
-    if "questionText" in out.columns:
-        out["questionText"] = out["questionText"].astype(str)
+    if "questionText" in output.columns:
+        output["questionText"] = output["questionText"].astype(str)
 
-    for col in out.columns:
-        if out[col].dtype == "object":
-            out[col] = out[col].map(_strip_surrogates)
+    for column_name in output.columns:
+        if output[column_name].dtype == "object":
+            output[column_name] = output[column_name].map(
+                _strip_surrogates
+            )
 
-    return out
+    return output

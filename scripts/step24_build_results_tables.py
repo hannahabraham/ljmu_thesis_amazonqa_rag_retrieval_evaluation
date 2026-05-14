@@ -1,20 +1,5 @@
-"""Assemble the six Results Sheet tables (v5).
+"""Assemble Results Sheet tables from per-question and aggregate outputs."""
 
-Reads per-question JSONL from outputs/per_question/, plus the RAGAS aggregate
-and retrieval-metrics CSVs, then calls each builder in src/evaluation/table_builders.
-The Table 7 builder is run again here as the canonical source of the `Rank`
-column for Table 1.
-
-Outputs to outputs/tables/:
-  table1_overall.csv          5 rows
-  table2_depth.csv            20 rows (5 pipelines × 4 k)
-  table3_category.csv         20 rows (4 named cats × 5 pipelines, k=5)
-  table4_length.csv           15 rows (3 buckets × 5 pipelines, k=5)
-  table6_answerability.csv    5 rows (k=5)
-  table7_final_ranking.csv    5 rows (composite over best-k)
-
-Run scripts/22_final_ranking.py afterwards to also emit pairwise_wilcoxon.csv.
-"""
 from __future__ import annotations
 
 import logging
@@ -40,89 +25,194 @@ from src.utils.io import load_per_question
 from src.utils.logging_config import configure_logging
 
 configure_logging()
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
+
+RAGAS_COLUMNS = [
+    "pipeline",
+    "k",
+    "faithfulness",
+    "context_precision",
+    "context_recall",
+]
+
+RETRIEVAL_COLUMNS = [
+    "pipeline",
+    "k",
+    "recall_at_k",
+    "mrr",
+]
 
 
 def _load_ragas() -> pd.DataFrame:
+    """Load aggregate RAGAS metrics, or return an empty placeholder."""
     path = OUTPUT_DIR / "ragas_metrics.csv"
+
     if not path.exists():
-        logger.warning("No RAGAS metrics at %s — Faithfulness/CP/CR will be blank", path)
-        return pd.DataFrame(columns=["pipeline", "k", "faithfulness",
-                                     "context_precision", "context_recall"])
+        LOGGER.warning(
+            "No RAGAS metrics at %s; Faithfulness/CP/CR will be blank",
+            path,
+        )
+        return pd.DataFrame(columns=RAGAS_COLUMNS)
+
     return pd.read_csv(path)
 
 
 def _load_retrieval() -> pd.DataFrame:
+    """Load aggregate retrieval metrics, or return an empty placeholder."""
     path = OUTPUT_DIR / "retrieval_metrics.csv"
+
     if not path.exists():
-        logger.warning("No retrieval metrics at %s — Table 2 Recall@K/MRR will be blank", path)
-        return pd.DataFrame(columns=["pipeline", "k", "recall_at_k", "mrr"])
+        LOGGER.warning(
+            "No retrieval metrics at %s; Table 2 Recall@K/MRR will be blank",
+            path,
+        )
+        return pd.DataFrame(columns=RETRIEVAL_COLUMNS)
+
     return pd.read_csv(path)
 
 
-def _ensure_per_row_ragas(per_q: pd.DataFrame, ragas: pd.DataFrame) -> pd.DataFrame:
-    """Broadcast aggregate RAGAS metrics onto per_q where row-level missing."""
-    needed = ("faithfulness", "context_precision", "context_recall")
-    for col in needed:
-        if col not in per_q.columns:
-            per_q[col] = pd.NA
+def _ensure_per_row_ragas(
+    per_question: pd.DataFrame,
+    ragas: pd.DataFrame,
+) -> pd.DataFrame:
+    """Fill missing row-level RAGAS columns from aggregate metrics."""
+    metric_columns = (
+        "faithfulness",
+        "context_precision",
+        "context_recall",
+    )
+
+    for column_name in metric_columns:
+        if column_name not in per_question.columns:
+            per_question[column_name] = pd.NA
+
     if ragas.empty:
-        return per_q
-    agg = ragas.rename(columns={c: f"_agg_{c}" for c in needed})[
-        ["pipeline", "k"] + [f"_agg_{c}" for c in needed]
+        return per_question
+
+    aggregate = ragas.rename(
+        columns={
+            column_name: f"_agg_{column_name}"
+            for column_name in metric_columns
+        }
+    )
+
+    aggregate = aggregate[
+        ["pipeline", "k"]
+        + [f"_agg_{column_name}" for column_name in metric_columns]
     ]
-    df = per_q.merge(agg, on=["pipeline", "k"], how="left")
-    for col in needed:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(df[f"_agg_{col}"])
-    return df.drop(columns=[f"_agg_{c}" for c in needed if f"_agg_{c}" in df.columns])
+
+    merged = per_question.merge(
+        aggregate,
+        on=["pipeline", "k"],
+        how="left",
+    )
+
+    for column_name in metric_columns:
+        aggregate_column = f"_agg_{column_name}"
+
+        merged[column_name] = (
+            pd.to_numeric(
+                merged[column_name],
+                errors="coerce",
+            )
+            .fillna(merged[aggregate_column])
+        )
+
+    return merged.drop(
+        columns=[
+            f"_agg_{column_name}"
+            for column_name in metric_columns
+            if f"_agg_{column_name}" in merged.columns
+        ]
+    )
+
+
+def _write_table(
+    dataframe: pd.DataFrame,
+    filename: str,
+) -> None:
+    """Write a table CSV to the tables directory and log row count."""
+    output_path = TABLES_DIR / filename
+
+    dataframe.to_csv(output_path, index=False)
+
+    LOGGER.info(
+        "Wrote %s (%d rows)",
+        output_path,
+        len(dataframe),
+    )
 
 
 def main() -> None:
-    per_q = load_per_question(
-        PER_QUESTION_DIR, pipelines=list(PIPELINE_KEYS), seed=RANDOM_SEED,
+    """Build and write all Results Sheet tables."""
+    per_question = load_per_question(
+        PER_QUESTION_DIR,
+        pipelines=list(PIPELINE_KEYS),
+        seed=RANDOM_SEED,
     )
-    if per_q.empty:
+
+    if per_question.empty:
         raise SystemExit(
-            f"No per-question JSONL in {PER_QUESTION_DIR}. Run scripts/11_run_*.py first."
+            f"No per-question JSONL in {PER_QUESTION_DIR}. "
+            "Run the pipeline scripts first."
         )
 
     ragas = _load_ragas()
     retrieval = _load_retrieval()
-    per_q = _ensure_per_row_ragas(per_q, ragas)
 
-    # Table 7 first so we can backfill the Rank column on Table 1.
-    table7 = build_table7_final_ranking(per_q, ragas_df=ragas)
-    table7_path = TABLES_DIR / "table7_final_ranking.csv"
-    table7.to_csv(table7_path, index=False)
-    logger.info("Wrote %s (%d rows)", table7_path, len(table7))
+    per_question = _ensure_per_row_ragas(
+        per_question,
+        ragas,
+    )
 
-    rank_lookup = dict(zip(table7["Pipeline"], table7["Rank"]))
+    table7 = build_table7_final_ranking(
+        per_question,
+        ragas_df=ragas,
+    )
+    _write_table(table7, "table7_final_ranking.csv")
 
-    table1 = build_table1_overall(per_q, ragas_df=ragas)
-    table1["Rank"] = table1["Architecture / Method"].map(rank_lookup).fillna("")
-    table1_path = TABLES_DIR / "table1_overall.csv"
-    table1.to_csv(table1_path, index=False)
-    logger.info("Wrote %s (%d rows)", table1_path, len(table1))
+    rank_lookup = dict(
+        zip(
+            table7["Pipeline"],
+            table7["Rank"],
+        )
+    )
 
-    table2 = build_table2_depth(per_q, retrieval_df=retrieval, ragas_df=ragas)
-    table2_path = TABLES_DIR / "table2_depth.csv"
-    table2.to_csv(table2_path, index=False)
-    logger.info("Wrote %s (%d rows)", table2_path, len(table2))
+    table1 = build_table1_overall(
+        per_question,
+        ragas_df=ragas,
+    )
+    table1["Rank"] = (
+        table1["Architecture / Method"]
+        .map(rank_lookup)
+        .fillna("")
+    )
+    _write_table(table1, "table1_overall.csv")
 
-    table3 = build_table3_category(per_q, ragas_df=ragas)
-    table3_path = TABLES_DIR / "table3_category.csv"
-    table3.to_csv(table3_path, index=False)
-    logger.info("Wrote %s (%d rows)", table3_path, len(table3))
+    table2 = build_table2_depth(
+        per_question,
+        retrieval_df=retrieval,
+        ragas_df=ragas,
+    )
+    _write_table(table2, "table2_depth.csv")
 
-    table4 = build_table4_length(per_q, ragas_df=ragas)
-    table4_path = TABLES_DIR / "table4_length.csv"
-    table4.to_csv(table4_path, index=False)
-    logger.info("Wrote %s (%d rows)", table4_path, len(table4))
+    table3 = build_table3_category(
+        per_question,
+        ragas_df=ragas,
+    )
+    _write_table(table3, "table3_category.csv")
 
-    table6 = build_table6_answerability(per_q, ragas_df=ragas)
-    table6_path = TABLES_DIR / "table6_answerability.csv"
-    table6.to_csv(table6_path, index=False)
-    logger.info("Wrote %s (%d rows)", table6_path, len(table6))
+    table4 = build_table4_length(
+        per_question,
+        ragas_df=ragas,
+    )
+    _write_table(table4, "table4_length.csv")
+
+    table6 = build_table6_answerability(
+        per_question,
+        ragas_df=ragas,
+    )
+    _write_table(table6, "table6_answerability.csv")
 
 
 if __name__ == "__main__":

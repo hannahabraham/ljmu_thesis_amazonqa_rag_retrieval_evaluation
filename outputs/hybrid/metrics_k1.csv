@@ -1,0 +1,2 @@
+Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
+Hybrid Retrieval,hybrid,1,200,0,0.2059,0.2059,0.2059,0.2059,0.0,0.1181,0.1154,0.3274,0.5539,0.4461,0.314,0.019,0.535,0.5125,0.1056

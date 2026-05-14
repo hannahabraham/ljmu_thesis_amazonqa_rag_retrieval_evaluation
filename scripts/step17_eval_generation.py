@@ -1,16 +1,19 @@
-"""Aggregate generation-quality + faithfulness metrics across (pipeline, k).
+"""Aggregate generation-quality and lexical faithfulness metrics."""
 
-Captures: EM, F1, ROUGE-L, BERTScore F1, Semantic Similarity, lexical
-Groundedness, lexical Hallucination Rate. Bootstrap 95% CIs throughout.
-"""
 from __future__ import annotations
 
 import logging
 from itertools import product
+from typing import Any
 
 import pandas as pd
 
-from config.settings import K_VALUES, OUTPUT_DIR, PIPELINE_KEYS, pipeline_output_dir
+from config.settings import (
+    K_VALUES,
+    OUTPUT_DIR,
+    PIPELINE_KEYS,
+    pipeline_output_dir,
+)
 from src.evaluation.faithfulness import groundedness, hallucination_rate_row
 from src.evaluation.generation_metrics import (
     bertscore_f1,
@@ -24,85 +27,204 @@ from src.utils.io import parse_list_field
 from src.utils.logging_config import configure_logging
 
 configure_logging()
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
+
+
+def _load_answers(pipeline: str, k_value: int) -> pd.DataFrame:
+    """Load generated answers for one pipeline and k value."""
+    answers_path = pipeline_output_dir(pipeline) / f"answers_k{k_value}.csv"
+
+    if not answers_path.exists():
+        LOGGER.warning("Missing answers file: %s", answers_path)
+        return pd.DataFrame()
+
+    dataframe = pd.read_csv(answers_path)
+
+    dataframe["retrieved_context"] = dataframe["retrieved_context"].apply(
+        parse_list_field
+    )
+
+    return dataframe
+
+
+def _answerable_rows(dataframe: pd.DataFrame) -> pd.DataFrame:
+    """Return rows whose gold answer is not unanswerable."""
+    return dataframe[
+        dataframe["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"
+    ].reset_index(drop=True)
+
+
+def _bootstrap_metric(values: list[float]) -> tuple[float, float, float]:
+    """Return bootstrap mean and confidence interval for a metric list."""
+    return bootstrap_ci(values)
+
+
+def _compute_answer_metrics(dataframe: pd.DataFrame) -> dict[str, Any]:
+    """Compute generation-quality metrics on answerable rows."""
+    generated = dataframe["generated_answer"].fillna("").tolist()
+    gold = dataframe["gold_answer"].fillna("").tolist()
+
+    exact_matches = [
+        exact_match(row["generated_answer"], row["gold_answer"])
+        for _, row in dataframe.iterrows()
+    ]
+
+    token_f1_scores = [
+        token_f1(row["generated_answer"], row["gold_answer"])
+        for _, row in dataframe.iterrows()
+    ]
+
+    rouge_scores = [
+        rouge_l(row["generated_answer"], row["gold_answer"])
+        for _, row in dataframe.iterrows()
+    ]
+
+    bert_scores = bertscore_f1(generated, gold)
+    similarity_scores = semantic_similarity(generated, gold)
+
+    em_mean, em_lower, em_upper = _bootstrap_metric(
+        [float(value) for value in exact_matches]
+    )
+    f1_mean, f1_lower, f1_upper = _bootstrap_metric(token_f1_scores)
+    rouge_mean, rouge_lower, rouge_upper = _bootstrap_metric(rouge_scores)
+    bert_mean, bert_lower, bert_upper = _bootstrap_metric(bert_scores)
+    sim_mean, sim_lower, sim_upper = _bootstrap_metric(similarity_scores)
+
+    return {
+        "em": em_mean,
+        "em_lo": em_lower,
+        "em_hi": em_upper,
+        "em_correct": int(sum(exact_matches)),
+        "f1": f1_mean,
+        "f1_lo": f1_lower,
+        "f1_hi": f1_upper,
+        "rouge_l": rouge_mean,
+        "rouge_l_lo": rouge_lower,
+        "rouge_l_hi": rouge_upper,
+        "bertscore_f1": bert_mean,
+        "bertscore_f1_lo": bert_lower,
+        "bertscore_f1_hi": bert_upper,
+        "semantic_similarity": sim_mean,
+        "semantic_similarity_lo": sim_lower,
+        "semantic_similarity_hi": sim_upper,
+    }
+
+
+def _compute_faithfulness_metrics(
+    dataframe: pd.DataFrame,
+) -> dict[str, float]:
+    """Compute lexical groundedness and hallucination over non-refusals."""
+    if "refused" in dataframe.columns:
+        refused_flags = dataframe["refused"].astype(bool).tolist()
+    else:
+        refused_flags = [False] * len(dataframe)
+
+    grounded_scores: list[float] = []
+    hallucination_scores: list[float] = []
+
+    for (_, row), is_refused in zip(dataframe.iterrows(), refused_flags):
+        if is_refused:
+            continue
+
+        generated_answer = str(row.get("generated_answer", ""))
+        retrieved_context = row["retrieved_context"]
+
+        grounded_score = groundedness(
+            generated_answer,
+            retrieved_context,
+        )
+        hallucination_score = hallucination_rate_row(
+            generated_answer,
+            retrieved_context,
+        )
+
+        if grounded_score == grounded_score:
+            grounded_scores.append(grounded_score)
+
+        if hallucination_score == hallucination_score:
+            hallucination_scores.append(hallucination_score)
+
+    grounded_mean, grounded_lower, grounded_upper = _bootstrap_metric(
+        grounded_scores
+    )
+    halluc_mean, halluc_lower, halluc_upper = _bootstrap_metric(
+        hallucination_scores
+    )
+
+    return {
+        "groundedness": grounded_mean,
+        "groundedness_lo": grounded_lower,
+        "groundedness_hi": grounded_upper,
+        "hallucination_rate": halluc_mean,
+        "hallucination_rate_lo": halluc_lower,
+        "hallucination_rate_hi": halluc_upper,
+    }
+
+
+def _upsert_pipeline_metrics(
+    pipeline: str,
+    row: dict[str, Any],
+) -> None:
+    """Write or update per-pipeline generation metrics."""
+    output_path = pipeline_output_dir(pipeline) / "generation_metrics.csv"
+
+    if output_path.exists():
+        existing = pd.read_csv(output_path)
+    else:
+        existing = pd.DataFrame()
+
+    if not existing.empty:
+        existing = existing[
+            ~(
+                (existing["pipeline"] == row["pipeline"])
+                & (existing["k"] == row["k"])
+            )
+        ]
+
+    output = (
+        pd.concat(
+            [existing, pd.DataFrame([row])],
+            ignore_index=True,
+        )
+        .sort_values("k")
+        .reset_index(drop=True)
+    )
+
+    output.to_csv(output_path, index=False)
 
 
 def main() -> None:
-    rows: list[dict] = []
-    for pipeline, k in product(PIPELINE_KEYS, K_VALUES):
-        path = pipeline_output_dir(pipeline) / f"answers_k{k}.csv"
-        if not path.exists():
-            continue
-        df_full = pd.read_csv(path)
-        df_full["retrieved_context"] = df_full["retrieved_context"].apply(parse_list_field)
+    """Compute and save generation metrics for all pipelines and k values."""
+    rows: list[dict[str, Any]] = []
 
-        df = df_full[df_full["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"] \
-            .reset_index(drop=True)
-        if df.empty:
+    for pipeline, k_value in product(PIPELINE_KEYS, K_VALUES):
+        full_dataframe = _load_answers(pipeline, k_value)
+
+        if full_dataframe.empty:
             continue
 
-        ems = [exact_match(r["generated_answer"], r["gold_answer"]) for _, r in df.iterrows()]
-        f1s = [token_f1(r["generated_answer"], r["gold_answer"]) for _, r in df.iterrows()]
-        rouges = [rouge_l(r["generated_answer"], r["gold_answer"]) for _, r in df.iterrows()]
-        berts = bertscore_f1(df["generated_answer"].fillna("").tolist(),
-                             df["gold_answer"].fillna("").tolist())
-        sims = semantic_similarity(df["generated_answer"].fillna("").tolist(),
-                                   df["gold_answer"].fillna("").tolist())
+        answerable_dataframe = _answerable_rows(full_dataframe)
 
-        # Faithfulness/hallucination computed over *all* non-refusal rows in df_full,
-        # not just answerable ones — refusals don't make claims, so they're skipped.
-        refused = df_full["refused"].astype(bool).tolist() if "refused" in df_full.columns else \
-            [False] * len(df_full)
-        grounded_scores: list[float] = []
-        halluc_scores: list[float] = []
-        for (_, r), is_refused in zip(df_full.iterrows(), refused):
-            if is_refused:
-                continue
-            g = groundedness(str(r.get("generated_answer", "")), r["retrieved_context"])
-            h = hallucination_rate_row(str(r.get("generated_answer", "")), r["retrieved_context"])
-            if g == g:
-                grounded_scores.append(g)
-            if h == h:
-                halluc_scores.append(h)
-
-        em_mean, em_lo, em_hi = bootstrap_ci([float(x) for x in ems])
-        f1_mean, f1_lo, f1_hi = bootstrap_ci(f1s)
-        rouge_mean, rouge_lo, rouge_hi = bootstrap_ci(rouges)
-        bert_mean, bert_lo, bert_hi = bootstrap_ci(berts)
-        sim_mean, sim_lo, sim_hi = bootstrap_ci(sims)
-        gnd_mean, gnd_lo, gnd_hi = bootstrap_ci(grounded_scores)
-        hal_mean, hal_lo, hal_hi = bootstrap_ci(halluc_scores)
+        if answerable_dataframe.empty:
+            continue
 
         row = {
-            "pipeline": pipeline, "k": k, "n": len(df),
-            "em": em_mean, "em_lo": em_lo, "em_hi": em_hi, "em_correct": int(sum(ems)),
-            "f1": f1_mean, "f1_lo": f1_lo, "f1_hi": f1_hi,
-            "rouge_l": rouge_mean, "rouge_l_lo": rouge_lo, "rouge_l_hi": rouge_hi,
-            "bertscore_f1": bert_mean, "bertscore_f1_lo": bert_lo, "bertscore_f1_hi": bert_hi,
-            "semantic_similarity": sim_mean,
-            "semantic_similarity_lo": sim_lo, "semantic_similarity_hi": sim_hi,
-            "groundedness": gnd_mean,
-            "groundedness_lo": gnd_lo, "groundedness_hi": gnd_hi,
-            "hallucination_rate": hal_mean,
-            "hallucination_rate_lo": hal_lo, "hallucination_rate_hi": hal_hi,
+            "pipeline": pipeline,
+            "k": k_value,
+            "n": len(answerable_dataframe),
+            **_compute_answer_metrics(answerable_dataframe),
+            **_compute_faithfulness_metrics(full_dataframe),
         }
+
         rows.append(row)
 
-        # Mirror per-pipeline
-        per_pipeline_path = pipeline_output_dir(pipeline) / "generation_metrics.csv"
-        existing = (
-            pd.read_csv(per_pipeline_path) if per_pipeline_path.exists()
-            else pd.DataFrame()
-        )
-        existing = existing[~((existing.get("pipeline") == pipeline) & (existing.get("k") == k))] \
-            if not existing.empty else existing
-        out_df = pd.concat([existing, pd.DataFrame([row])], ignore_index=True) \
-            .sort_values("k").reset_index(drop=True)
-        out_df.to_csv(per_pipeline_path, index=False)
+        _upsert_pipeline_metrics(pipeline, row)
 
-    out = OUTPUT_DIR / "generation_metrics.csv"
-    pd.DataFrame(rows).to_csv(out, index=False)
-    logger.info("Wrote %s", out)
+    output_path = OUTPUT_DIR / "generation_metrics.csv"
+
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+    LOGGER.info("Wrote %s", output_path)
 
 
 if __name__ == "__main__":

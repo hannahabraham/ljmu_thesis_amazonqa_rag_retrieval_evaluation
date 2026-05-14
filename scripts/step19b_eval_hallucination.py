@@ -1,13 +1,13 @@
-"""Hallucination rate + refusal rate on answerable per (pipeline, k).
+"""Compute hallucination and refusal rates by pipeline and k value.
 
-v5: reports the pair `(hallucination_rate, refusal_rate_on_answerable)` for
-Table 6. Hallucination rate is mean (1 - faithfulness) over **attempted answers
-on answerable rows only** (refusals don't count, gold-unanswerable doesn't count).
+Hallucination rate is computed as mean ``1 - faithfulness`` over attempted
+answers on answerable rows only. Refusals and gold-unanswerable rows are
+excluded from hallucination-rate calculation.
 
-Requires per-row faithfulness in the per-question JSONL — populated by
-scripts/18_eval_ragas.py. Falls back to the aggregate from
-outputs/ragas_metrics.csv if per-row scores are absent (with a [indicative] flag).
+If row-level faithfulness is unavailable, aggregate RAGAS faithfulness is used
+as a fallback and the row is marked indicative.
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,68 +30,158 @@ from src.utils.io import load_per_question
 from src.utils.logging_config import configure_logging
 
 configure_logging()
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
+
+RAGAS_COLUMNS = ["pipeline", "k", "faithfulness"]
 
 
 def _aggregate_ragas() -> pd.DataFrame:
+    """Load aggregate RAGAS metrics, or return an empty placeholder."""
     path = OUTPUT_DIR / "ragas_metrics.csv"
+
     if not path.exists():
-        return pd.DataFrame(columns=["pipeline", "k", "faithfulness"])
+        return pd.DataFrame(columns=RAGAS_COLUMNS)
+
     return pd.read_csv(path)
 
 
+def _fallback_hallucination_rate(
+    ragas_aggregate: pd.DataFrame,
+    pipeline: str,
+    k_value: int,
+) -> float:
+    """Compute fallback hallucination rate from aggregate faithfulness."""
+    ragas_row = ragas_aggregate[
+        (ragas_aggregate["pipeline"] == pipeline)
+        & (ragas_aggregate["k"] == k_value)
+    ]
+
+    if ragas_row.empty:
+        return float("nan")
+
+    return 1.0 - float(ragas_row["faithfulness"].iloc[0])
+
+
+def _compute_hallucination_row(
+    per_question: pd.DataFrame,
+    ragas_aggregate: pd.DataFrame,
+    pipeline: str,
+    k_value: int,
+) -> dict:
+    """Compute one hallucination/refusal metrics row."""
+    has_row_level_faithfulness = (
+        "faithfulness" in per_question.columns
+        and per_question["faithfulness"].notna().any()
+    )
+
+    if has_row_level_faithfulness:
+        hallucination = hallucination_rate(per_question)
+        indicative = False
+    else:
+        hallucination = _fallback_hallucination_rate(
+            ragas_aggregate,
+            pipeline,
+            k_value,
+        )
+        indicative = True
+
+    refusal = refusal_rate_on_answerable(per_question)
+
+    return {
+        "pipeline": pipeline,
+        "k": int(k_value),
+        "n": int(len(per_question)),
+        "hallucination_rate": (
+            round(hallucination, 4)
+            if pd.notna(hallucination)
+            else ""
+        ),
+        "refusal_rate_on_answerable": (
+            round(refusal, 4)
+            if pd.notna(refusal)
+            else ""
+        ),
+        "indicative": indicative,
+    }
+
+
+def _upsert_pipeline_metrics(
+    pipeline: str,
+    row: dict,
+) -> None:
+    """Write or update the per-pipeline hallucination metrics CSV."""
+    output_path = pipeline_output_dir(pipeline) / "hallucination_metrics.csv"
+
+    if output_path.exists():
+        existing = pd.read_csv(output_path)
+    else:
+        existing = pd.DataFrame()
+
+    if not existing.empty:
+        existing = existing[
+            ~(
+                (existing["pipeline"] == row["pipeline"])
+                & (existing["k"] == row["k"])
+            )
+        ]
+
+    output = (
+        pd.concat(
+            [existing, pd.DataFrame([row])],
+            ignore_index=True,
+        )
+        .sort_values("k")
+        .reset_index(drop=True)
+    )
+
+    output.to_csv(output_path, index=False)
+
+
 def main() -> None:
-    ragas_agg = _aggregate_ragas()
+    """Compute hallucination metrics and save aggregate outputs."""
+    ragas_aggregate = _aggregate_ragas()
     rows: list[dict] = []
 
     for pipeline in PIPELINE_KEYS:
-        for k in K_VALUES:
-            per_q = load_per_question(
-                PER_QUESTION_DIR, pipelines=[pipeline], ks=[k], seed=RANDOM_SEED,
+        for k_value in K_VALUES:
+            per_question = load_per_question(
+                PER_QUESTION_DIR,
+                pipelines=[pipeline],
+                ks=[k_value],
+                seed=RANDOM_SEED,
             )
-            if per_q.empty:
-                logger.warning("No per-question rows for %s k=%d", pipeline, k)
+
+            if per_question.empty:
+                LOGGER.warning(
+                    "No per-question rows for %s k=%d",
+                    pipeline,
+                    k_value,
+                )
                 continue
 
-            if "faithfulness" in per_q.columns and per_q["faithfulness"].notna().any():
-                halluc = hallucination_rate(per_q)
-                indicative = False
-            else:
-                # Fall back to aggregate-level faithfulness (no per-row filtering).
-                ragas_row = ragas_agg[
-                    (ragas_agg["pipeline"] == pipeline) & (ragas_agg["k"] == k)
-                ]
-                if ragas_row.empty:
-                    halluc = float("nan")
-                else:
-                    # Apply aggregate (1 - faithfulness) to all attempted answerable rows.
-                    halluc = 1.0 - float(ragas_row["faithfulness"].iloc[0])
-                indicative = True
-
-            refusal = refusal_rate_on_answerable(per_q)
-            rows.append({
-                "pipeline": pipeline,
-                "k": int(k),
-                "n": int(len(per_q)),
-                "hallucination_rate": round(halluc, 4) if pd.notna(halluc) else "",
-                "refusal_rate_on_answerable": round(refusal, 4) if pd.notna(refusal) else "",
-                "indicative": indicative,
-            })
-
-            # Mirror per-pipeline
-            per_pipeline_path = pipeline_output_dir(pipeline) / "hallucination_metrics.csv"
-            existing = (
-                pd.read_csv(per_pipeline_path) if per_pipeline_path.exists() else pd.DataFrame()
+            row = _compute_hallucination_row(
+                per_question,
+                ragas_aggregate,
+                pipeline,
+                k_value,
             )
-            existing = existing[~((existing.get("pipeline") == pipeline) & (existing.get("k") == k))] \
-                if not existing.empty else existing
-            out_df = pd.concat([existing, pd.DataFrame([rows[-1]])], ignore_index=True) \
-                .sort_values("k").reset_index(drop=True)
-            out_df.to_csv(per_pipeline_path, index=False)
 
-    out = OUTPUT_DIR / "hallucination_metrics.csv"
-    pd.DataFrame(rows).to_csv(out, index=False)
-    logger.info("Wrote %s (%d rows)", out, len(rows))
+            rows.append(row)
+
+            _upsert_pipeline_metrics(
+                pipeline,
+                row,
+            )
+
+    output_path = OUTPUT_DIR / "hallucination_metrics.csv"
+
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+    LOGGER.info(
+        "Wrote %s (%d rows)",
+        output_path,
+        len(rows),
+    )
 
 
 if __name__ == "__main__":
