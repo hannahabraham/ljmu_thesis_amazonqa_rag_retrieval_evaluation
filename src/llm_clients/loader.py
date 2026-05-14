@@ -1,40 +1,82 @@
-"""Load API keys from environment variables."""
+"""Load one active API key from environment variables or the terminal."""
 
 from __future__ import annotations
 
+import getpass
 import os
+import re
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-def load_keys_with_prefix(prefix: str) -> list[str]:
-    """Load all environment variables matching a prefix."""
-    keys: list[str] = []
+def prompt_for_key(service_name: str) -> str:
+    """Ask the user for an API key without saving it to disk."""
+    while True:
+        value = getpass.getpass(f"Enter {service_name} API key: ").strip()
+        if value:
+            return value
 
-    for env_key, env_value in os.environ.items():
-        if not env_key.startswith(prefix):
-            continue
+        print("API key cannot be blank.")
 
-        cleaned_value = env_value.strip()
 
-        if cleaned_value:
-            keys.append(cleaned_value)
+def prompt_for_replacement_key(service_name: str, error: BaseException) -> str:
+    """Ask for a replacement key after the active key fails."""
+    print()
+    print(f"{service_name} key failed or reached quota:")
+    print(str(error))
+    return prompt_for_key(f"new {service_name}")
 
-    if not keys:
-        raise ValueError(
-            f"No environment variables found with prefix: {prefix}",
-        )
 
-    return sorted(keys)
+def _numbered_key_sort(name: str) -> tuple[int, str]:
+    match = re.search(r"_(\d+)$", name)
+    if match:
+        return int(match.group(1)), name
+
+    return 0, name
+
+
+def load_single_key(
+    service_name: str,
+    primary_env_name: str,
+    numbered_prefix: str,
+) -> str:
+    """Load exactly one API key, preferring the unnumbered variable."""
+    primary_value = os.getenv(primary_env_name, "").strip()
+    if primary_value:
+        return primary_value
+
+    numbered_names = sorted(
+        (
+            name
+            for name, value in os.environ.items()
+            if name.startswith(numbered_prefix) and value.strip()
+        ),
+        key=_numbered_key_sort,
+    )
+
+    if numbered_names:
+        return os.environ[numbered_names[0]].strip()
+
+    return prompt_for_key(service_name)
+
+
+def load_groq_key() -> str:
+    """Load one Groq API key."""
+    return load_single_key("Groq", "GROQ_API_KEY", "GROQ_API_KEY_")
+
+
+def load_gemini_key() -> str:
+    """Load one Gemini API key."""
+    return load_single_key("Gemini", "GEMINI_API_KEY", "GEMINI_API_KEY_")
 
 
 def load_groq_keys() -> list[str]:
-    """Load Groq API keys."""
-    return load_keys_with_prefix("GROQ_API_KEY")
+    """Load one Groq API key, wrapped for existing call sites."""
+    return [load_groq_key()]
 
 
 def load_gemini_keys() -> list[str]:
-    """Load Gemini API keys."""
-    return load_keys_with_prefix("GEMINI_API_KEY")
+    """Load one Gemini API key, wrapped for existing call sites."""
+    return [load_gemini_key()]

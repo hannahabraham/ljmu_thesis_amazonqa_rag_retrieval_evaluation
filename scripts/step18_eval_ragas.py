@@ -245,6 +245,7 @@ def _evaluate(
     pipeline: str,
     k_value: int,
     seed: int,
+    workers: int | None,
 ) -> dict | None:
     """Run RAGAS evaluation for one pipeline/k combination."""
     dataframe = _load_per_question(
@@ -256,9 +257,16 @@ def _evaluate(
     if dataframe is None or dataframe.empty:
         return None
 
+    LOGGER.info(
+        "Running RAGAS for %s k=%d on %d rows",
+        pipeline,
+        k_value,
+        len(dataframe),
+    )
+
     ragas_input = _prepare_ragas_input(dataframe)
 
-    result = run_ragas(ragas_input)
+    result = run_ragas(ragas_input, workers=workers)
 
     scores = (
         result.to_pandas()
@@ -326,6 +334,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=RANDOM_SEED,
     )
 
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "RAGAS parallel worker count "
+            "(default: one per loaded Gemini key)"
+        ),
+    )
+
     return parser
 
 
@@ -358,6 +376,7 @@ def main() -> None:
             pipeline,
             k_value,
             seed=args.seed,
+            workers=args.workers,
         )
 
         if result is not None:

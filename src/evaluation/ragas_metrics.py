@@ -8,7 +8,7 @@ import pandas as pd
 from src.llm_clients.ragas_judge import build_ragas_judge
 
 
-def run_ragas(results_df: pd.DataFrame) -> Any:
+def run_ragas(results_df: pd.DataFrame, workers: int | None = None) -> Any:
     """Evaluate a results DataFrame with the columns:
         question, answer, contexts (list[str]), ground_truth.
     """
@@ -18,11 +18,12 @@ def run_ragas(results_df: pd.DataFrame) -> Any:
     from ragas.run_config import RunConfig
 
     judge_llm, embeddings, n_keys = build_ragas_judge()
+    worker_count = max(1, int(workers or n_keys))
     ds = Dataset.from_pandas(results_df.reset_index(drop=True))
     return evaluate(
         ds,
         metrics=[faithfulness, context_precision, context_recall],
         llm=judge_llm,
         embeddings=embeddings,
-        run_config=RunConfig(max_workers=max(1, n_keys)),
+        run_config=RunConfig(max_workers=worker_count),
     )

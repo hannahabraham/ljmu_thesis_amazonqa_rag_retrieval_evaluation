@@ -1,0 +1,2 @@
+pipeline,k,n,faithfulness,context_precision,context_recall
+bm25,5,200,0.6654940476190476,0.5974166666420284,0.43150921658986174

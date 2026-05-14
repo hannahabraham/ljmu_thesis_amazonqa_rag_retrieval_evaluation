@@ -56,7 +56,7 @@ All pipelines share the same generator prompt and the same Groq client, so diffe
 | val   | `https://amazon-qa.s3-us-west-2.amazonaws.com/val-qar.jsonl` |
 | test  | Google Drive (download via `gdown`) |
 
-Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/01_download_dataset.py](scripts/01_download_dataset.py).
+Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/step01_download_dataset.py](scripts/step01_download_dataset.py).
 
 **Sampled corpus:** 100 records, stratified by `questionType + is_answerable`, drawn 60/20/20 from train/val/test. The per-ASIN review pool is **uncapped** — every available review is kept (~30–50 chunks/ASIN), giving each retriever a meaningful candidate space.
 
@@ -80,40 +80,40 @@ Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/01_download_dat
 
 | Step | Script | Output |
 |---|---|---|
-| 1. Download | `01_download_dataset.py` | `datasets/raw/{train,val,test}-qar.jsonl` |
-| 2. Load and standardise | `02_load_and_standardize.py` | per-split DataFrames |
-| 3. EDA per split | `03_run_eda_per_split.py` | `eda_summary.csv` + 6 plots |
-| 4. Merge and clean | `04_merge_and_clean.py` | `combined_amazonqa.csv` |
-| 5. Stratified sample | `05_stratified_sample.py` | `final_100_records.csv` |
-| 6. Build KB | `06_build_knowledge_base.py` | `knowledge_base_full_reviews.csv` |
-| 7. Golden draft | `07_build_golden_dataset_draft.py` | `golden_dataset_100_draft.csv` |
-| 8. Gemini judge | `08_run_gemini_judge.py` | `golden_dataset_100_verified.csv` |
-| 8b. Consistency check | `08b_validate_golden.py` | fail-fast assertion |
-| 9. Chunking | `09_create_chunks.py` | passage / sentence / parent-child CSVs |
-| 10. Indexes | `10_build_indexes.py` | 3 Qdrant collections + `bm25.pkl` |
+| 1. Download | `step01_download_dataset.py` | `datasets/raw/{train,val,test}-qar.jsonl` |
+| 2. Load and standardise | `step02_load_and_standardize.py` | per-split DataFrames |
+| 3. EDA per split | `step03_run_eda_per_split.py` | `eda_summary.csv` + 6 plots |
+| 4. Merge and clean | `step04_merge_and_clean.py` | `combined_amazonqa.csv` |
+| 5. Stratified sample | `step05_stratified_sample.py` | `final_100_records.csv` |
+| 6. Build KB | `step06_build_knowledge_base.py` | `knowledge_base_full_reviews.csv` |
+| 7. Golden draft | `step07_build_golden_dataset_draft.py` | `golden_dataset_100_draft.csv` |
+| 8a. Gemini judge | `step08a_run_gemini_judge.py` | `golden_dataset_100_verified.csv` |
+| 8b. Consistency check | `step08b_validate_golden.py` | fail-fast assertion |
+| 9. Chunking | `step09_create_chunks.py` | passage / sentence / parent-child CSVs |
+| 10. Indexes | `step10_build_indexes.py` | 3 Qdrant collections + `bm25.pkl` |
 
 ### Retrieval, generation, evaluation
 
-Each `1X_run_<pipeline>.py` script runs retrieval + generation + per-cell evaluation in one call. Per-question records are written to **`outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl`** (the v5 source of truth), with per-pipeline artefacts mirrored under **`outputs/<pipeline>/`**. RAGAS scores are written back into the JSONL by step 18; the six Results Sheet tables are assembled from the JSONL by `24_build_results_tables.py`.
+Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell evaluation in one call. Per-question records are written to **`outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl`** (the v5 source of truth), with per-pipeline artefacts mirrored under **`outputs/<pipeline>/`**. RAGAS scores are written back into the JSONL by step 18; the six Results Sheet tables are assembled from the JSONL by `step24_build_results_tables.py`.
 
 | Step | Script | Notes |
 |---|---|---|
-| 11. BM25 | `11_run_bm25.py` | `--ks 1 3 5 10` (default), `--seed`, `--output-dir` |
-| 12. Dense | `12_run_dense.py` | Qdrant + MiniLM |
-| 13. Sentence Window | `13_run_sentence_window.py` | expand `[prev, match, next]` |
-| 14. Hybrid | `14_run_hybrid.py` | BM25 + Dense fused via RRF |
-| 15. Parent-Child | `15_run_parent_child.py` | full parent reviews |
-| 16. Retrieval metrics | `16_eval_retrieval.py` | Recall@K, MRR (full table) |
-| 17. Generation metrics | `17_eval_generation.py` | EM, F1, Correct-Answers |
-| 18. RAGAS | `18_eval_ragas.py` | all 4 k — Faithfulness, ContextPrecision/Recall (Gemini judge); per-row write-back |
-| 19. Answerability | `19_eval_answerability.py` | regex refusal detector, accuracy |
-| 19b. Hallucination | `19b_eval_hallucination.py` | hallucination rate + refusal rate on answerable |
-| 20. Category analysis | `20_category_analysis.py` | per-category F1 (4 named categories), with CIs |
-| 21. Length analysis | `21_question_length_analysis.py` | per-`q_bucket` F1, with CIs |
-| 22. Final ranking | `22_final_ranking.py` | composite + pairwise Wilcoxon + sensitivity sweeps |
-| 23. Reproducibility | `23_reproducibility_check.py` | second-seed drift report |
-| 24. Build results tables | `24_build_results_tables.py` | 6 CSVs to `outputs/tables/` aligned to the Results Sheet |
-| 25. Excel export | `25_export_excel.py` | bundles the table CSVs into one `.xlsx` |
+| 11. BM25 | `step11_run_bm25.py` | `--ks 1 3 5 10` (default), `--seed`, `--output-dir` |
+| 12. Dense | `step12_run_dense.py` | Qdrant + MiniLM |
+| 13. Sentence Window | `step13_run_sentence_window.py` | expand `[prev, match, next]` |
+| 14. Hybrid | `step14_run_hybrid.py` | BM25 + Dense fused via RRF |
+| 15. Parent-Child | `step15_run_parent_child.py` | full parent reviews |
+| 16. Retrieval metrics | `step16_eval_retrieval.py` | Recall@K, MRR (full table) |
+| 17. Generation metrics | `step17_eval_generation.py` | EM, F1, Correct-Answers |
+| 18. RAGAS | `step18_eval_ragas.py` | all 4 k — Faithfulness, ContextPrecision/Recall (Gemini judge); per-row write-back |
+| 19a. Answerability | `step19a_eval_answerability.py` | regex refusal detector, accuracy |
+| 19b. Hallucination | `step19b_eval_hallucination.py` | hallucination rate + refusal rate on answerable |
+| 20. Category analysis | `step20_category_analysis.py` | per-category F1 (4 named categories), with CIs |
+| 21. Length analysis | `step21_question_length_analysis.py` | per-`q_bucket` F1, with CIs |
+| 22. Final ranking | `step22_final_ranking.py` | composite + pairwise Wilcoxon + sensitivity sweeps |
+| 23. Reproducibility | `step23_reproducibility_check.py` | second-seed drift report |
+| 24. Build results tables | `step24_build_results_tables.py` | 6 CSVs to `outputs/tables/` aligned to the Results Sheet |
+| 25. Excel export | `step25_export_excel.py` | bundles the table CSVs into one `.xlsx` |
 
 ---
 
@@ -133,7 +133,7 @@ A three-layer pipeline picks one canonical answer per question:
 2. **Grounding filter** — drop candidates with token Jaccard <0.1 against the record's KB reviews.
 3. **Gemini judge** — only when (1) and (2) tie or fail. Uses `gemini-2.5-flash` with a constrained JSON schema validated by Pydantic; one retry on malformed JSON.
 
-`evidence_text` is populated by KB lookup (not stored in the judge response), so the golden CSV cannot drift from the KB. [scripts/08b_validate_golden.py](scripts/08b_validate_golden.py) enforces this as a hard precondition before chunking.
+`evidence_text` is populated by KB lookup (not stored in the judge response), so the golden CSV cannot drift from the KB. [scripts/step08b_validate_golden.py](scripts/step08b_validate_golden.py) enforces this as a hard precondition before chunking.
 
 ---
 
@@ -160,7 +160,7 @@ Unanswerable rows are excluded from retrieval aggregates (no defined gold doc).
 | **F1 Score** | Token overlap F1 |
 | **ROUGE-L** | Longest common subsequence F1 |
 | **Semantic Similarity** | Cosine similarity between MiniLM embeddings of prediction and gold |
-| **BERTScore F1** | Aggregate-only (`scripts/17_eval_generation.py`) |
+| **BERTScore F1** | Aggregate-only (`scripts/step17_eval_generation.py`) |
 
 For unanswerable rows the correct generation is a refusal — token F1 doesn't apply; answerability accuracy does.
 
@@ -297,9 +297,9 @@ score = 0.25·F1 + 0.20·Faithfulness + 0.15·ContextPrecision
 │   │   ├── refusal.py                     # regex-based refusal detector
 │   │   └── rag_generator.py
 │   ├── llm_clients/
-│   │   ├── base_key_manager.py            # multi-key rotation + jittered backoff
-│   │   ├── groq_key_manager.py
-│   │   ├── gemini_key_manager.py          # per-instance google-genai Client
+│   │   ├── loader.py                      # single active key loading / prompts
+│   │   ├── parallel_groq.py               # sequential Groq batch client
+│   │   ├── gemini_key_manager.py          # single-key google-genai Client
 │   │   ├── ragas_judge.py
 │   │   └── error_terms.py
 │   ├── evaluation/
@@ -316,7 +316,7 @@ score = 0.25·F1 + 0.20·Faithfulness + 0.15·ContextPrecision
 │       └── io.py
 │
 ├── scripts/
-│   ├── 01_download_dataset.py … 25_export_excel.py
+│   ├── step01_download_dataset.py … step25_export_excel.py
 │   └── validate_refusal_detector.py
 │
 ├── outputs/
@@ -336,8 +336,8 @@ score = 0.25·F1 + 0.20·Faithfulness + 0.15·ContextPrecision
 
 - Python 3.10+
 - Docker (for Qdrant)
-- Groq API key(s) — generation
-- Google Gemini API key(s) — judge + RAGAS
+- Groq API key — generation
+- Google Gemini API key — judge + RAGAS
 
 ### Setup
 
@@ -361,16 +361,16 @@ docker run -d -p 6333:6333 qdrant/qdrant
 
 | Variable | Purpose |
 |---|---|
-| `GROQ_API_KEY_1` … `GROQ_API_KEY_3` | Generator keys, rotated on quota errors |
+| `GROQ_API_KEY` | Active generator key; numbered keys are accepted only as fallback input |
 | `GROQ_MODEL` | Default `llama-3.3-70b-versatile` |
-| `GEMINI_API_KEY_1` … `GEMINI_API_KEY_2` | Judge keys |
+| `GEMINI_API_KEY` | Active judge key; numbered keys are accepted only as fallback input |
 | `GEMINI_JUDGE_MODEL` | Default `gemini-2.5-flash` |
 | `QDRANT_HOST` / `QDRANT_PORT` | Default `localhost:6333` |
 | `EMBEDDING_MODEL` | Default `sentence-transformers/all-MiniLM-L6-v2` |
 | `RANDOM_SEED` | Default `42` (wired through every sampler / bootstrap) |
 | `LLM_CACHE_DIR` | SHA256-keyed prompt cache (resumable runs) |
 
-Multi-key rotation and exponential-jittered backoff are implemented in [src/llm_clients/base_key_manager.py](src/llm_clients/base_key_manager.py) and shared by both the Groq and Gemini concrete classes.
+The LLM clients use one active key at a time. If the active Groq or Gemini key fails with quota/authentication errors, the script asks for a replacement key in the terminal and continues with that key.
 
 ---
 
@@ -379,25 +379,25 @@ Multi-key rotation and exponential-jittered backoff are implemented in [src/llm_
 ### Data preparation (one-time)
 
 ```bash
-python scripts/01_download_dataset.py
-python scripts/02_load_and_standardize.py
-python scripts/03_run_eda_per_split.py
-python scripts/04_merge_and_clean.py
-python scripts/05_stratified_sample.py
-python scripts/06_build_knowledge_base.py
-python scripts/07_build_golden_dataset_draft.py
-python scripts/08_run_gemini_judge.py
-python scripts/08b_validate_golden.py
-python scripts/09_create_chunks.py
-python scripts/10_build_indexes.py
+python -m scripts.step01_download_dataset
+python -m scripts.step02_load_and_standardize
+python -m scripts.step03_run_eda_per_split
+python -m scripts.step04_merge_and_clean
+python -m scripts.step05_stratified_sample
+python -m scripts.step06_build_knowledge_base
+python -m scripts.step07_build_golden_dataset_draft
+python -m scripts.step08a_run_gemini_judge
+python -m scripts.step08b_validate_golden
+python -m scripts.step09_create_chunks
+python -m scripts.step10_build_indexes
 ```
 
 ### Smoke run + refusal-detector validation (one-time)
 
 ```bash
-python scripts/11_run_bm25.py --ks 5 --sample 50
+python -m scripts.step11_run_bm25 --ks 5 --sample 50
 # Hand-label outputs/refusal_validation_set.csv, then:
-python scripts/validate_refusal_detector.py
+python -m scripts.validate_refusal_detector
 ```
 
 ### Run pipelines incrementally — one at a time, all k
@@ -405,37 +405,37 @@ python scripts/validate_refusal_detector.py
 Each script runs retrieval + generation + per-cell evaluation, writes per-cell artefacts to `outputs/<pipeline>/`, and appends a row to `outputs/results.csv`. Open the CSV between runs to inspect progress.
 
 ```bash
-python scripts/11_run_bm25.py             --ks 1 3 5 10
-python scripts/12_run_dense.py            --ks 1 3 5 10
-python scripts/13_run_sentence_window.py  --ks 1 3 5 10
-python scripts/14_run_hybrid.py           --ks 1 3 5 10
-python scripts/15_run_parent_child.py     --ks 1 3 5 10
+python -m scripts.step11_run_bm25             --ks 1 3 5 10
+python -m scripts.step12_run_dense            --ks 1 3 5 10
+python -m scripts.step13_run_sentence_window  --ks 1 3 5 10
+python -m scripts.step14_run_hybrid           --ks 1 3 5 10
+python -m scripts.step15_run_parent_child     --ks 1 3 5 10
 ```
 
 Or one cell at a time when you want the tightest feedback loop:
 
 ```bash
-python scripts/11_run_bm25.py --ks 5
+python -m scripts.step11_run_bm25 --ks 5
 ```
 
 ### RAGAS, full-table aggregates, analysis, export
 
 RAGAS is run only at k=5 and only after all 5 pipelines are done. The full-table
-eval scripts (16/17/19) re-aggregate every per-pipeline `answers_k{k}.csv` they find and write
+eval scripts (16/17/19a) re-aggregate every per-pipeline `answers_k{k}.csv` they find and write
 their own metric CSVs (with bootstrap/Wilson CIs) — run them whenever you want.
 
 ```bash
-python scripts/16_eval_retrieval.py
-python scripts/17_eval_generation.py
-python scripts/18_eval_ragas.py              # all 4 k — Gemini-routed, per-row write-back
-python scripts/19_eval_answerability.py
-python scripts/19b_eval_hallucination.py
-python scripts/20_category_analysis.py
-python scripts/21_question_length_analysis.py
-python scripts/22_final_ranking.py           # composite + Wilcoxon + sensitivity
-python scripts/23_reproducibility_check.py   # second-seed drift report
-python scripts/24_build_results_tables.py    # 6 CSVs to outputs/tables/
-python scripts/25_export_excel.py            # bundle into thesis_results.xlsx
+python -m scripts.step16_eval_retrieval
+python -m scripts.step17_eval_generation
+python -m scripts.step18_eval_ragas              # all 4 k — Gemini-routed, per-row write-back
+python -m scripts.step19a_eval_answerability
+python -m scripts.step19b_eval_hallucination
+python -m scripts.step20_category_analysis
+python -m scripts.step21_question_length_analysis
+python -m scripts.step22_final_ranking           # composite + Wilcoxon + sensitivity
+python -m scripts.step23_reproducibility_check   # second-seed drift report
+python -m scripts.step24_build_results_tables    # 6 CSVs to outputs/tables/
+python -m scripts.step25_export_excel            # bundle into thesis_results.xlsx
 ```
 
 ### LLM call budget
@@ -449,7 +449,7 @@ python scripts/25_export_excel.py            # bundle into thesis_results.xlsx
 | **Subtotal** | **~3,600** |
 | Re-run buffer (×2) | **~7,200** |
 
-Multi-key Groq rotation + on-disk prompt cache typically absorbs all retries within free-tier quota.
+Single-key prompting plus the on-disk prompt cache keeps reruns resumable: completed answers are reused, and only blank/missing answers are called again.
 
 ---
 
@@ -476,8 +476,6 @@ mypy src/
 ```
 
 The integration test ([tests/test_integration_pipeline.py](tests/test_integration_pipeline.py)) exercises the full pipeline on five fake records with stubbed Groq/Gemini clients and an in-memory retriever — no API keys, no Qdrant required.
-
-Key manager tests cover quota-rotation, rate-limit-backoff, unknown-error propagation, exhausted-keys, and bounded backoff delay — all without ever touching the network.
 
 ---
 

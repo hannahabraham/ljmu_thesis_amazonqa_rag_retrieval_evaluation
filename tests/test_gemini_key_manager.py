@@ -1,8 +1,4 @@
-"""Sanity-check Gemini manager wiring without importing google-genai.
-
-The abstract methods are patched to keep tests offline. Behavioural retry
-coverage lives in ``test_base_key_manager.py``.
-"""
+"""Sanity-check Gemini manager wiring without importing google-genai."""
 
 from __future__ import annotations
 

@@ -1,8 +1,10 @@
-"""LangChain chat model that round-robins Gemini API keys across calls."""
+"""Single-key Gemini chat model for RAGAS.
+
+The exported class keeps the old name so existing imports keep working.
+"""
 
 from __future__ import annotations
 
-import threading
 from typing import Any
 
 from langchain_core.callbacks import (
@@ -15,55 +17,50 @@ from langchain_core.outputs import ChatResult
 from pydantic import Field
 
 from src.llm_clients.error_terms import should_try_next_key
+from src.llm_clients.loader import prompt_for_replacement_key
 
 
 class RoundRobinGeminiChat(BaseChatModel):
-    """Chat model wrapper that rotates Gemini API keys per call."""
+    """Gemini chat wrapper with one active key and interactive replacement."""
 
     keys: list[str]
     model: str
     temperature: float = 0.0
     max_retries: int = 1
 
-    delegates: Any = Field(default=None, exclude=True)
-    key_index: Any = Field(default=None, exclude=True)
-    lock: Any = Field(default=None, exclude=True)
+    delegate: Any = Field(default=None, exclude=True)
+    active_key: Any = Field(default=None, exclude=True)
 
     def __init__(self, **data: Any) -> None:
-        """Initialize one Gemini chat client per API key."""
+        """Initialize one Gemini chat client."""
         super().__init__(**data)
 
-        if not self.keys:
-            raise ValueError("keys must be non-empty")
+        api_key = str(next(iter(self.keys), "")).strip()
+        if not api_key:
+            raise ValueError("Gemini api key must be non-empty")
 
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        delegates = [
-            ChatGoogleGenerativeAI(
-                model=self.model,
-                google_api_key=key,
-                temperature=self.temperature,
-                max_retries=self.max_retries,
-            )
-            for key in self.keys
-        ]
-
-        object.__setattr__(self, "delegates", delegates)
-        object.__setattr__(self, "key_index", [0])
-        object.__setattr__(self, "lock", threading.Lock())
+        object.__setattr__(self, "active_key", api_key)
+        object.__setattr__(self, "delegate", self._build_delegate(api_key))
 
     @property
     def _llm_type(self) -> str:
         """Return custom LLM type name."""
-        return "round_robin_gemini"
+        return "single_key_gemini"
 
-    def next_llm(self) -> Any:
-        """Return the next Gemini delegate."""
-        with self.lock:
-            index = self.key_index[0]
-            self.key_index[0] = (index + 1) % len(self.delegates)
+    def _build_delegate(self, api_key: str) -> Any:
+        from langchain_google_genai import ChatGoogleGenerativeAI
 
-        return self.delegates[index]
+        return ChatGoogleGenerativeAI(
+            model=self.model,
+            google_api_key=api_key,
+            temperature=self.temperature,
+            max_retries=self.max_retries,
+        )
+
+    def _replace_key(self, error: BaseException) -> None:
+        api_key = prompt_for_replacement_key("Gemini", error)
+        object.__setattr__(self, "active_key", api_key)
+        object.__setattr__(self, "delegate", self._build_delegate(api_key))
 
     def _generate(
         self,
@@ -72,14 +69,12 @@ class RoundRobinGeminiChat(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """Generate a chat response with key rotation."""
+        """Generate a chat response, asking for a new key on quota/auth errors."""
         last_error: BaseException | None = None
 
-        for _ in range(len(self.delegates)):
-            llm = self.next_llm()
-
+        for _ in range(self.max_retries + 1):
             try:
-                return llm._generate(
+                return self.delegate._generate(
                     messages=messages,
                     stop=stop,
                     run_manager=run_manager,
@@ -87,8 +82,9 @@ class RoundRobinGeminiChat(BaseChatModel):
                 )
 
             except BaseException as error:
+                last_error = error
                 if should_try_next_key(error):
-                    last_error = error
+                    self._replace_key(error)
                     continue
 
                 raise
@@ -105,14 +101,12 @@ class RoundRobinGeminiChat(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """Generate an async chat response with key rotation."""
+        """Generate an async chat response with the active key."""
         last_error: BaseException | None = None
 
-        for _ in range(len(self.delegates)):
-            llm = self.next_llm()
-
+        for _ in range(self.max_retries + 1):
             try:
-                return await llm._agenerate(
+                return await self.delegate._agenerate(
                     messages=messages,
                     stop=stop,
                     run_manager=run_manager,
@@ -120,8 +114,9 @@ class RoundRobinGeminiChat(BaseChatModel):
                 )
 
             except BaseException as error:
+                last_error = error
                 if should_try_next_key(error):
-                    last_error = error
+                    self._replace_key(error)
                     continue
 
                 raise
