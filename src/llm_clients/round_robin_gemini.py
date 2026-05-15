@@ -27,6 +27,7 @@ class RoundRobinGeminiChat(BaseChatModel):
     model: str
     temperature: float = 0.0
     max_retries: int = 1
+    interactive_replacement: bool = True
 
     delegate: Any = Field(default=None, exclude=True)
     active_key: Any = Field(default=None, exclude=True)
@@ -83,7 +84,7 @@ class RoundRobinGeminiChat(BaseChatModel):
 
             except BaseException as error:
                 last_error = error
-                if should_try_next_key(error):
+                if self.interactive_replacement and should_try_next_key(error):
                     self._replace_key(error)
                     continue
 
@@ -115,7 +116,7 @@ class RoundRobinGeminiChat(BaseChatModel):
 
             except BaseException as error:
                 last_error = error
-                if should_try_next_key(error):
+                if self.interactive_replacement and should_try_next_key(error):
                     self._replace_key(error)
                     continue
 

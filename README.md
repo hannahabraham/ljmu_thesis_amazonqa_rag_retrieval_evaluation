@@ -18,15 +18,14 @@
 10. [Installation](#installation)
 11. [Configuration](#configuration)
 12. [Usage](#usage)
-13. [Reproducibility](#reproducibility)
-14. [Tests](#tests)
-15. [Dependencies](#dependencies)
+13. [Tests](#tests)
+14. [Dependencies](#dependencies)
 
 ---
 
 ## Overview
 
-This project benchmarks five retrieval strategies for grounded answer generation over Amazon product reviews. A stratified sample of 100 questions (60 train / 20 validation / 20 test) is evaluated across four retrieval depths (k ∈ {1, 3, 5, 10}), generating answers with `llama-3.3-70b-versatile` (Groq) and judging them with `gemini-2.5-flash` (chosen as a cross-family judge to avoid self-bias).
+This project benchmarks five retrieval strategies for grounded answer generation over Amazon product reviews. A stratified sample of 200 questions (120 train / 40 validation / 40 test) is evaluated across four retrieval depths (k ∈ {1, 3, 5, 10}), generating answers with `llama-3.3-70b-versatile` (Groq) and judging them with `gemini-2.5-flash` (chosen as a cross-family judge to avoid self-bias).
 
 The contribution is methodological as much as empirical: every metric cell in the result tables is reported with sample size and a 95% confidence interval; cells with n<10 are flagged `[indicative]` and excluded from the composite ranking, so weak sub-cells cannot dominate the recommendation.
 
@@ -58,7 +57,7 @@ All pipelines share the same generator prompt and the same Groq client, so diffe
 
 Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/step01_download_dataset.py](scripts/step01_download_dataset.py).
 
-**Sampled corpus:** 100 records, stratified by `questionType + is_answerable`, drawn 60/20/20 from train/val/test. The per-ASIN review pool is **uncapped** — every available review is kept (~30–50 chunks/ASIN), giving each retriever a meaningful candidate space.
+**Sampled corpus:** 200 records, stratified by `questionType + is_answerable`, drawn 120/40/40 from train/val/test. The per-ASIN review pool is **uncapped** — every available review is kept (~30–50 chunks/ASIN), giving each retriever a meaningful candidate space.
 
 ---
 
@@ -69,7 +68,7 @@ Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/step01_download
 │                         END-TO-END PIPELINE                              │
 │                                                                          │
 │  download → load JSONL → standardise → EDA per split → merge & clean     │
-│      → stratified-100 sample → KB (full reviews) → golden draft          │
+│      → stratified-200 sample → KB (full reviews) → golden draft          │
 │      → Gemini judge → consistency check → 3 chunking strategies          │
 │      → BM25 + Qdrant indexes → 5 pipelines × 4 k values                  │
 │      → answer generation → 4 evaluation suites → 3 analyses → export     │
@@ -84,10 +83,10 @@ Raw JSONL files are gitignored (~3.9 GB) and fetched by [scripts/step01_download
 | 2. Load and standardise | `step02_load_and_standardize.py` | per-split DataFrames |
 | 3. EDA per split | `step03_run_eda_per_split.py` | `eda_summary.csv` + 6 plots |
 | 4. Merge and clean | `step04_merge_and_clean.py` | `combined_amazonqa.csv` |
-| 5. Stratified sample | `step05_stratified_sample.py` | `final_100_records.csv` |
+| 5. Stratified sample | `step05_stratified_sample.py` | `final_200_records.csv` |
 | 6. Build KB | `step06_build_knowledge_base.py` | `knowledge_base_full_reviews.csv` |
-| 7. Golden draft | `step07_build_golden_dataset_draft.py` | `golden_dataset_100_draft.csv` |
-| 8a. Gemini judge | `step08a_run_gemini_judge.py` | `golden_dataset_100_verified.csv` |
+| 7. Golden draft | `step07_build_golden_dataset_draft.py` | `golden_dataset_200_draft.csv` |
+| 8a. Gemini judge | `step08a_run_gemini_judge.py` | `golden_dataset_200_verified.csv` |
 | 8b. Consistency check | `step08b_validate_golden.py` | fail-fast assertion |
 | 9. Chunking | `step09_create_chunks.py` | passage / sentence / parent-child CSVs |
 | 10. Indexes | `step10_build_indexes.py` | 3 Qdrant collections + `bm25.pkl` |
@@ -105,15 +104,14 @@ Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell ev
 | 15. Parent-Child | `step15_run_parent_child.py` | full parent reviews |
 | 16. Retrieval metrics | `step16_eval_retrieval.py` | Recall@K, MRR (full table) |
 | 17. Generation metrics | `step17_eval_generation.py` | EM, F1, Correct-Answers |
-| 18. RAGAS | `step18_eval_ragas.py` | all 4 k — Faithfulness, ContextPrecision/Recall (Gemini judge); per-row write-back |
+| 18. RAGAS | `step18_eval_ragas.py` | all k — Faithfulness, ContextPrecision/Recall (Gemini judge); per-row write-back |
 | 19a. Answerability | `step19a_eval_answerability.py` | regex refusal detector, accuracy |
 | 19b. Hallucination | `step19b_eval_hallucination.py` | hallucination rate + refusal rate on answerable |
 | 20. Category analysis | `step20_category_analysis.py` | per-category F1 (4 named categories), with CIs |
 | 21. Length analysis | `step21_question_length_analysis.py` | per-`q_bucket` F1, with CIs |
 | 22. Final ranking | `step22_final_ranking.py` | composite + pairwise Wilcoxon + sensitivity sweeps |
-| 23. Reproducibility | `step23_reproducibility_check.py` | second-seed drift report |
-| 24. Build results tables | `step24_build_results_tables.py` | 6 CSVs to `outputs/tables/` aligned to the Results Sheet |
-| 25. Excel export | `step25_export_excel.py` | bundles the table CSVs into one `.xlsx` |
+| 23. Build results tables | `step24_build_results_tables.py` | 6 CSVs to `outputs/tables/` aligned to the Results Sheet |
+| 24. Excel export | `step25_export_excel.py` | bundles the table CSVs into one `.xlsx` |
 
 ---
 
@@ -121,7 +119,7 @@ Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell ev
 
 ### Knowledge base
 
-The KB stores **full reviews** (no curated 3-chunk cap), pulled from `review_snippets`, `top_sentences_IR`, `top_review_helpful`, and `top_review_wilson` for each of the 100 records. Reviews <5 words and within-record duplicates are dropped. Expected size: 3,000–5,000 KB rows.
+The KB stores **full reviews** (no curated 3-chunk cap), pulled from `review_snippets`, `top_sentences_IR`, `top_review_helpful`, and `top_review_wilson` for each of the 200 records. Reviews <5 words and within-record duplicates are dropped. Expected size: roughly 2,500–3,000 KB rows.
 
 Each row carries `doc_id` (e.g. `KB_00042`), `record_id`, `asin`, `category`, source field, and the full review text — enabling honest Parent-Child retrieval (real parent reviews, not synthetic ones) and a real candidate pool for BM25 / Dense / Hybrid to rank over.
 
@@ -168,7 +166,7 @@ For unanswerable rows the correct generation is a refusal — token F1 doesn't a
 
 | Metric | Source | Notes |
 |---|---|---|
-| **Faithfulness Score** | RAGAS (LLM-as-judge, Gemini) | k=5 only; merged in by step 24 |
+| **Faithfulness Score** | RAGAS (LLM-as-judge, Gemini) | merged in by step 24 |
 | **Context Precision** | RAGAS | Retrieval-side relevance signal |
 | **Context Recall** | RAGAS | Coverage of gold evidence |
 | **Groundedness** | Lexical overlap of answer content tokens with retrieved context | Cheap, computed every cell |
@@ -215,7 +213,7 @@ outputs/
 │   ├── summary.csv                   # all four k values for this pipeline
 │   ├── retrieval_metrics.csv         # bootstrapped Hit/Recall/MRR/nDCG (per-pipeline mirror)
 │   ├── generation_metrics.csv        # bootstrapped EM/F1/ROUGE-L/Sim/Groundedness
-│   ├── ragas_metrics.csv             # Faithfulness / ContextP / ContextR (k=5)
+│   ├── ragas_metrics.csv             # Faithfulness / ContextP / ContextR
 │   └── answerability_metrics.csv     # Wilson CIs + long-context + noise robustness
 ├── dense/        … same layout
 ├── sentwin/      … same layout
@@ -227,8 +225,8 @@ outputs/
 ├── generation_metrics.csv            # cross-pipeline aggregate
 ├── ragas_metrics.csv                 # cross-pipeline aggregate
 ├── answerability_metrics.csv         # cross-pipeline aggregate
-├── category_metrics.csv              # per-category breakdown (k=5)
-├── qbucket_metrics.csv               # per-question-length breakdown (k=5)
+├── category_metrics.csv              # per-category breakdown by k
+├── qbucket_metrics.csv               # per-question-length breakdown by k
 ├── final_ranking.csv                 # composite score + sensitivity
 ├── thesis_results.xlsx               # bundled tables
 └── eda_plots/                        # 6 plots × 3 splits
@@ -420,47 +418,47 @@ python -m scripts.step11_run_bm25 --ks 5
 
 ### RAGAS, full-table aggregates, analysis, export
 
-RAGAS is run only at k=5 and only after all 5 pipelines are done. The full-table
+RAGAS runs across all configured k values after all 5 pipelines are done. The full-table
 eval scripts (16/17/19a) re-aggregate every per-pipeline `answers_k{k}.csv` they find and write
 their own metric CSVs (with bootstrap/Wilson CIs) — run them whenever you want.
 
 ```bash
 python -m scripts.step16_eval_retrieval
 python -m scripts.step17_eval_generation
-python -m scripts.step18_eval_ragas              # all 4 k — Gemini-routed, per-row write-back
+python -m scripts.step18_eval_ragas              # all k RAGAS — Gemini-routed, per-row write-back
 python -m scripts.step19a_eval_answerability
 python -m scripts.step19b_eval_hallucination
 python -m scripts.step20_category_analysis
 python -m scripts.step21_question_length_analysis
 python -m scripts.step22_final_ranking           # composite + Wilcoxon + sensitivity
-python -m scripts.step23_reproducibility_check   # second-seed drift report
-python -m scripts.step24_build_results_tables    # 6 CSVs to outputs/tables/
-python -m scripts.step25_export_excel            # bundle into thesis_results.xlsx
+python -m scripts.step23_build_results_tables    # 6 CSVs to outputs/tables/
+python -m scripts.step24_export_excel            # bundle into thesis_results.xlsx
 ```
+
+For quota-safe RAGAS runs, step 18 now skips rows that already have RAGAS scores,
+restores matching rows from the on-disk cache, writes JSONL checkpoints after each
+batch, and retries quota/rate-limit failures with exponential backoff. Start
+conservatively and increase only after a cell completes without quota errors:
+
+```bash
+python -m scripts.step18_eval_ragas --pipelines bm25 --ks 1 --workers 1 --batch-size 10 --sleep-seconds 30
+```
+
+The defaults can also be set with `RAGAS_BATCH_SIZE`, `RAGAS_SLEEP_BETWEEN_BATCHES`,
+`RAGAS_MAX_RETRIES`, `RAGAS_BACKOFF_SECONDS`, and `RAGAS_BACKOFF_MULTIPLIER`.
 
 ### LLM call budget
 
 | Source | Calls |
 |---|---|
-| RAG generation (Groq) | 2,000 (5 pipelines × 4 k × 100 questions) |
-| RAGAS judging (Gemini) | ~1,500 (3 metrics × 500, k=5 only) |
-| Gemini golden judge | ~10–50 (one-time, only difficult rows) |
+| RAG generation (Groq) | 4,000 (5 pipelines × 4 k × 200 questions) |
+| RAGAS judging (Gemini) | ~12,000 (5 pipelines × 4 k × 200 questions × 3 metrics) |
+| Gemini golden judge | ~20–100 (one-time, only difficult rows) |
 | Refusal validation | ~50 (one-time hand-labelled) |
-| **Subtotal** | **~3,600** |
-| Re-run buffer (×2) | **~7,200** |
+| **Subtotal** | **~16,150** |
+| Re-run buffer (×2) | **~32,300** |
 
 Single-key prompting plus the on-disk prompt cache keeps reruns resumable: completed answers are reused, and only blank/missing answers are called again.
-
----
-
-## Reproducibility
-
-- `RANDOM_SEED=42` (env-controlled) is wired through every sklearn split, pandas sample, shuffler, and bootstrap CI.
-- Dependencies pinned in [requirements.txt](requirements.txt); capture `pip freeze > pip-freeze.txt` after install.
-- [datasets/processed/final_100_records.csv](datasets/processed/final_100_records.csv) and [datasets/processed/golden_dataset_100_verified.csv](datasets/processed/golden_dataset_100_verified.csv) are committed — the canonical sample and labels.
-- `temperature=0` is necessary but not sufficient for full determinism on Groq; each run is repeated twice and any drift >2% on F1 is reported.
-- SHA256 prompt cache at `LLM_CACHE_DIR` makes crashed runs resume in seconds.
-- Every result file logs Qdrant collection version, BM25 pickle SHA, embedding model SHA, and the refusal-detector pattern hash.
 
 ---
 

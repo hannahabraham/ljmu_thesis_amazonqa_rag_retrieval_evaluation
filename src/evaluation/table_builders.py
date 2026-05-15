@@ -22,6 +22,7 @@ The aggregate ragas DataFrame, if supplied, has columns
 ``pipeline, k, faithfulness, context_precision, context_recall`` keyed at the
 pipeline × k level.
 """
+
 from __future__ import annotations
 
 from typing import Iterable
@@ -97,6 +98,7 @@ def _ensure_bool(series: pd.Series) -> pd.Series:
         if isinstance(v, str):
             return v.strip().lower() in {"true", "1", "yes", "y", "t"}
         return bool(v)
+
     return series.apply(_coerce)
 
 
@@ -105,7 +107,8 @@ def _filter_k(per_q: pd.DataFrame, k: int) -> pd.DataFrame:
 
 
 def _attach_aggregate_ragas(
-    per_q: pd.DataFrame, ragas_df: pd.DataFrame | None,
+    per_q: pd.DataFrame,
+    ragas_df: pd.DataFrame | None,
 ) -> pd.DataFrame:
     """Broadcast aggregate RAGAS metrics onto per_q where row-level missing."""
     df = per_q.copy()
@@ -124,9 +127,11 @@ def _attach_aggregate_ragas(
     for col in needed:
         agg_col = f"_agg_{col}"
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(
-                df.get(agg_col, np.nan)
-            ) if agg_col in df.columns else df[col]
+            df[col] = (
+                pd.to_numeric(df[col], errors="coerce").fillna(df.get(agg_col, np.nan))
+                if agg_col in df.columns
+                else df[col]
+            )
         elif agg_col in df.columns:
             df[col] = df[agg_col]
     return df.drop(columns=[c for c in df.columns if c.startswith("_agg_")])
@@ -147,6 +152,7 @@ def _answerable_subset(per_q: pd.DataFrame) -> pd.DataFrame:
 
 def _ensure_is_correct(per_q: pd.DataFrame, threshold: float) -> pd.DataFrame:
     from src.evaluation.generation_metrics import is_correct
+
     df = per_q.copy()
     if "is_correct" in df.columns and df["is_correct"].notna().all():
         return df
@@ -162,11 +168,12 @@ def _pipeline_order(values: Iterable[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Table 1 — Overall Pipeline Performance (k=5)
+# Table 1 — Overall Pipeline Performance (all k)
 
 
 TABLE1_COLUMNS = [
     "Architecture / Method",
+    "K Value",
     "Experiment ID",
     "Total Questions",
     "Correct Answers",
@@ -186,8 +193,8 @@ def build_table1_overall(
     ragas_df: pd.DataFrame | None = None,
     f1_threshold: float = CORRECT_F1_THRESHOLD,
 ) -> pd.DataFrame:
-    """Table 1 — one row per pipeline at k=5."""
-    df = _filter_k(per_q, 5)
+    """Table 1 — one row per (pipeline, k)."""
+    df = per_q.copy()
     df = _attach_aggregate_ragas(df, ragas_df)
     df = _ensure_is_correct(df, f1_threshold)
     df["is_answerable"] = _ensure_bool(df["is_answerable"])
@@ -195,27 +202,57 @@ def build_table1_overall(
 
     rows: list[dict] = []
     for idx, pipeline in enumerate(_pipeline_order(df["pipeline"].unique()), start=1):
-        sub = df[df["pipeline"] == pipeline]
-        if sub.empty:
-            continue
-        answerable = _answerable_subset(sub)
-        ans_table = compute_answerability_table(
-            sub.assign(is_answerable=sub["is_answerable"].astype(int))
-        )
-        rows.append({
-            "Architecture / Method": PIPELINE_LABEL.get(pipeline, pipeline),
-            "Experiment ID": f"EXP_{idx:02d}_{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}_BASELINE",
-            "Total Questions": int(len(sub)),
-            "Correct Answers": correct_answers_count(sub, f1_threshold),
-            "Exact Match Accuracy (%)": round(_mean_or_nan(answerable.get("em", pd.Series(dtype=float))) * 100.0, 2),
-            "F1 Score": round(_mean_or_nan(answerable.get("token_f1", pd.Series(dtype=float))), 4),
-            "Faithfulness Score": round(_mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4),
-            "Context Precision": round(_mean_or_nan(sub.get("context_precision", pd.Series(dtype=float))), 4),
-            "Context Recall": round(_mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))), 4),
-            "Answerability Accuracy": round(float(ans_table["answerability_acc"].iloc[0]), 4),
-            "Avg Latency / Question": round(avg_latency_per_question_ms(sub), 2),
-            "Rank": "",  # filled by table7
-        })
+        pipeline_rows = df[df["pipeline"] == pipeline]
+        for k in sorted(
+            pd.to_numeric(pipeline_rows["k"], errors="coerce").dropna().unique()
+        ):
+            sub = pipeline_rows[pd.to_numeric(pipeline_rows["k"], errors="coerce") == k]
+            if sub.empty:
+                continue
+            answerable = _answerable_subset(sub)
+            ans_table = compute_answerability_table(
+                sub.assign(is_answerable=sub["is_answerable"].astype(int))
+            )
+            rows.append(
+                {
+                    "Architecture / Method": PIPELINE_LABEL.get(pipeline, pipeline),
+                    "K Value": int(k),
+                    "Experiment ID": f"EXP_{idx:02d}_{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}_K{int(k)}",
+                    "Total Questions": int(len(sub)),
+                    "Correct Answers": correct_answers_count(sub, f1_threshold),
+                    "Exact Match Accuracy (%)": round(
+                        _mean_or_nan(answerable.get("em", pd.Series(dtype=float)))
+                        * 100.0,
+                        2,
+                    ),
+                    "F1 Score": round(
+                        _mean_or_nan(
+                            answerable.get("token_f1", pd.Series(dtype=float))
+                        ),
+                        4,
+                    ),
+                    "Faithfulness Score": round(
+                        _mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4
+                    ),
+                    "Context Precision": round(
+                        _mean_or_nan(
+                            sub.get("context_precision", pd.Series(dtype=float))
+                        ),
+                        4,
+                    ),
+                    "Context Recall": round(
+                        _mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))),
+                        4,
+                    ),
+                    "Answerability Accuracy": round(
+                        float(ans_table["answerability_acc"].iloc[0]), 4
+                    ),
+                    "Avg Latency / Question": round(
+                        avg_latency_per_question_ms(sub), 2
+                    ),
+                    "Rank": "",  # filled by table7 for each pipeline label
+                }
+            )
     return pd.DataFrame(rows, columns=TABLE1_COLUMNS)
 
 
@@ -224,9 +261,16 @@ def build_table1_overall(
 
 
 TABLE2_COLUMNS = [
-    "Pipeline", "K Value", "Total Questions", "Recall@K", "MRR",
-    "Context Precision", "Context Recall",
-    "F1 Score", "Faithfulness Score", "Avg Latency / Question",
+    "Pipeline",
+    "K Value",
+    "Total Questions",
+    "Recall@K",
+    "MRR",
+    "Context Precision",
+    "Context Recall",
+    "F1 Score",
+    "Faithfulness Score",
+    "Avg Latency / Question",
 ]
 
 
@@ -249,33 +293,62 @@ def build_table2_depth(
             ret = retrieval_df[
                 (retrieval_df["pipeline"] == pipeline) & (retrieval_df["k"] == k)
             ]
-            recall = float(ret["recall_at_k"].iloc[0]) if not ret.empty else float("nan")
+            recall = (
+                float(ret["recall_at_k"].iloc[0]) if not ret.empty else float("nan")
+            )
             mrr = float(ret["mrr"].iloc[0]) if not ret.empty else float("nan")
             answerable = _answerable_subset(sub)
-            rows.append({
-                "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
-                "K Value": int(k),
-                "Total Questions": int(len(sub)),
-                "Recall@K": round(recall, 4) if not np.isnan(recall) else "",
-                "MRR": round(mrr, 4) if not np.isnan(mrr) else "",
-                "Context Precision": round(_mean_or_nan(sub.get("context_precision", pd.Series(dtype=float))), 4),
-                "Context Recall": round(_mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))), 4),
-                "F1 Score": round(_mean_or_nan(answerable.get("token_f1", pd.Series(dtype=float))), 4),
-                "Faithfulness Score": round(_mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4),
-                "Avg Latency / Question": round(avg_latency_per_question_ms(sub), 2),
-            })
+            rows.append(
+                {
+                    "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
+                    "K Value": int(k),
+                    "Total Questions": int(len(sub)),
+                    "Recall@K": round(recall, 4) if not np.isnan(recall) else "",
+                    "MRR": round(mrr, 4) if not np.isnan(mrr) else "",
+                    "Context Precision": round(
+                        _mean_or_nan(
+                            sub.get("context_precision", pd.Series(dtype=float))
+                        ),
+                        4,
+                    ),
+                    "Context Recall": round(
+                        _mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))),
+                        4,
+                    ),
+                    "F1 Score": round(
+                        _mean_or_nan(
+                            answerable.get("token_f1", pd.Series(dtype=float))
+                        ),
+                        4,
+                    ),
+                    "Faithfulness Score": round(
+                        _mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4
+                    ),
+                    "Avg Latency / Question": round(
+                        avg_latency_per_question_ms(sub), 2
+                    ),
+                }
+            )
     return pd.DataFrame(rows, columns=TABLE2_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
-# Table 3 — Category-Level (4 named cats × 5 pipelines, k=5)
+# Table 3 — Category-Level (4 named cats × 5 pipelines × all k)
 
 
 TABLE3_COLUMNS = [
-    "Product Category", "Pipeline", "Experiment ID", "Total Questions",
-    "Exact Match Accuracy (%)", "F1 Score",
-    "Faithfulness Score", "Context Precision", "Context Recall",
-    "Answerability Accuracy", "Observation",
+    "Product Category",
+    "Pipeline",
+    "K Value",
+    "Experiment ID",
+    "Total Questions",
+    "Exact Match Accuracy (%)",
+    "F1 Score",
+    "Faithfulness Score",
+    "Context Precision",
+    "Context Recall",
+    "Answerability Accuracy",
+    "Observation",
 ]
 
 
@@ -284,8 +357,8 @@ def build_table3_category(
     ragas_df: pd.DataFrame | None = None,
     named_categories: tuple[str, ...] = NAMED_CATEGORIES,
 ) -> pd.DataFrame:
-    """Table 3 — one row per (named_category, pipeline) at k=5."""
-    df = _filter_k(per_q, 5)
+    """Table 3 — one row per (named_category, pipeline, k)."""
+    df = per_q.copy()
     df = df[df["category"].isin(named_categories)].copy()
     df = _attach_aggregate_ragas(df, ragas_df)
     df["is_answerable"] = _ensure_bool(df["is_answerable"])
@@ -295,60 +368,102 @@ def build_table3_category(
         cat_df = df[df["category"] == category]
         if cat_df.empty:
             continue
-        f1_by_pipeline: dict[str, float] = {}
-        per_pipeline_rows: list[dict] = []
-        for pipeline_idx, pipeline in enumerate(_pipeline_order(cat_df["pipeline"].unique()), start=1):
-            sub = cat_df[cat_df["pipeline"] == pipeline]
-            if sub.empty:
-                continue
-            answerable = _answerable_subset(sub)
-            f1_val = _mean_or_nan(answerable.get("token_f1", pd.Series(dtype=float)))
-            f1_by_pipeline[pipeline] = f1_val
-            ans_table = compute_answerability_table(
-                sub.assign(is_answerable=sub["is_answerable"].astype(int))
-            )
-            exp_id = (
-                f"{CATEGORY_EXP_PREFIX.get(category, 'EXP_XX')}_"
-                f"{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}"
-            )
-            per_pipeline_rows.append({
-                "Product Category": category,
-                "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
-                "Experiment ID": exp_id,
-                "Total Questions": int(len(sub)),
-                "Exact Match Accuracy (%)": round(_mean_or_nan(answerable.get("em", pd.Series(dtype=float))) * 100.0, 2),
-                "F1 Score": round(f1_val, 4) if not np.isnan(f1_val) else "",
-                "Faithfulness Score": round(_mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4),
-                "Context Precision": round(_mean_or_nan(sub.get("context_precision", pd.Series(dtype=float))), 4),
-                "Context Recall": round(_mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))), 4),
-                "Answerability Accuracy": round(float(ans_table["answerability_acc"].iloc[0]), 4),
-            })
+        for k in sorted(pd.to_numeric(cat_df["k"], errors="coerce").dropna().unique()):
+            cat_k_df = cat_df[pd.to_numeric(cat_df["k"], errors="coerce") == k]
+            f1_by_pipeline: dict[str, float] = {}
+            per_pipeline_rows: list[dict] = []
+            for pipeline_idx, pipeline in enumerate(
+                _pipeline_order(cat_k_df["pipeline"].unique()), start=1
+            ):
+                sub = cat_k_df[cat_k_df["pipeline"] == pipeline]
+                if sub.empty:
+                    continue
+                answerable = _answerable_subset(sub)
+                f1_val = _mean_or_nan(
+                    answerable.get("token_f1", pd.Series(dtype=float))
+                )
+                f1_by_pipeline[pipeline] = f1_val
+                ans_table = compute_answerability_table(
+                    sub.assign(is_answerable=sub["is_answerable"].astype(int))
+                )
+                exp_id = (
+                    f"{CATEGORY_EXP_PREFIX.get(category, 'EXP_XX')}_"
+                    f"{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}_K{int(k)}"
+                )
+                per_pipeline_rows.append(
+                    {
+                        "Product Category": category,
+                        "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
+                        "K Value": int(k),
+                        "Experiment ID": exp_id,
+                        "Total Questions": int(len(sub)),
+                        "Exact Match Accuracy (%)": round(
+                            _mean_or_nan(answerable.get("em", pd.Series(dtype=float)))
+                            * 100.0,
+                            2,
+                        ),
+                        "F1 Score": round(f1_val, 4) if not np.isnan(f1_val) else "",
+                        "Faithfulness Score": round(
+                            _mean_or_nan(
+                                sub.get("faithfulness", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                        "Context Precision": round(
+                            _mean_or_nan(
+                                sub.get("context_precision", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                        "Context Recall": round(
+                            _mean_or_nan(
+                                sub.get("context_recall", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                        "Answerability Accuracy": round(
+                            float(ans_table["answerability_acc"].iloc[0]), 4
+                        ),
+                    }
+                )
 
-        if not per_pipeline_rows:
-            continue
-        best_pipeline = max(
-            f1_by_pipeline,
-            key=lambda p: -1.0 if np.isnan(f1_by_pipeline[p]) else f1_by_pipeline[p],
-        )
-        best_f1 = f1_by_pipeline[best_pipeline]
-        observation = (
-            f"Best in category: {PIPELINE_LABEL.get(best_pipeline, best_pipeline)} "
-            f"(F1={best_f1:.2f})"
-        )
-        for row in per_pipeline_rows:
-            row["Observation"] = observation
-            rows.append(row)
+            if not per_pipeline_rows:
+                continue
+            best_pipeline = max(
+                f1_by_pipeline,
+                key=lambda p: (
+                    -1.0 if np.isnan(f1_by_pipeline[p]) else f1_by_pipeline[p]
+                ),
+            )
+            best_f1 = f1_by_pipeline[best_pipeline]
+            observation = (
+                f"Best in category at k={int(k)}: "
+                f"{PIPELINE_LABEL.get(best_pipeline, best_pipeline)} "
+                f"(F1={best_f1:.2f})"
+            )
+            for row in per_pipeline_rows:
+                row["Observation"] = observation
+                rows.append(row)
     return pd.DataFrame(rows, columns=TABLE3_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
-# Table 4 — Question Length (3 buckets × 5 pipelines, k=5)
+# Table 4 — Question Length (3 buckets × 5 pipelines × all k)
 
 
 TABLE4_COLUMNS = [
-    "Question Length Bucket", "Word Count Rule", "Pipeline", "Experiment ID",
-    "Total Questions", "Exact Match Accuracy (%)", "F1 Score",
-    "Faithfulness Score", "Context Precision", "Context Recall", "Observation",
+    "Question Length Bucket",
+    "Word Count Rule",
+    "Pipeline",
+    "K Value",
+    "Experiment ID",
+    "Total Questions",
+    "Exact Match Accuracy (%)",
+    "F1 Score",
+    "Faithfulness Score",
+    "Context Precision",
+    "Context Recall",
+    "Observation",
 ]
 
 
@@ -356,8 +471,8 @@ def build_table4_length(
     per_q: pd.DataFrame,
     ragas_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Table 4 — one row per (bucket, pipeline) at k=5."""
-    df = _filter_k(per_q, 5)
+    """Table 4 — one row per (bucket, pipeline, k)."""
+    df = per_q.copy()
     df = _attach_aggregate_ragas(df, ragas_df)
     df["is_answerable"] = _ensure_bool(df["is_answerable"])
     word_count_rule = _word_count_rule()
@@ -367,56 +482,95 @@ def build_table4_length(
         bucket_df = df[df["q_bucket"] == bucket]
         if bucket_df.empty:
             continue
-        f1_by_pipeline: dict[str, float] = {}
-        per_pipeline_rows: list[dict] = []
-        for pipeline in _pipeline_order(bucket_df["pipeline"].unique()):
-            sub = bucket_df[bucket_df["pipeline"] == pipeline]
-            if sub.empty:
+        for k in sorted(
+            pd.to_numeric(bucket_df["k"], errors="coerce").dropna().unique()
+        ):
+            bucket_k_df = bucket_df[pd.to_numeric(bucket_df["k"], errors="coerce") == k]
+            f1_by_pipeline: dict[str, float] = {}
+            per_pipeline_rows: list[dict] = []
+            for pipeline in _pipeline_order(bucket_k_df["pipeline"].unique()):
+                sub = bucket_k_df[bucket_k_df["pipeline"] == pipeline]
+                if sub.empty:
+                    continue
+                answerable = _answerable_subset(sub)
+                f1_val = _mean_or_nan(
+                    answerable.get("token_f1", pd.Series(dtype=float))
+                )
+                f1_by_pipeline[pipeline] = f1_val
+                exp_id = (
+                    f"{BUCKET_EXP_PREFIX.get(bucket, 'EXP_XX')}_"
+                    f"{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}_K{int(k)}"
+                )
+                per_pipeline_rows.append(
+                    {
+                        "Question Length Bucket": BUCKET_LABEL[bucket],
+                        "Word Count Rule": word_count_rule[bucket],
+                        "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
+                        "K Value": int(k),
+                        "Experiment ID": exp_id,
+                        "Total Questions": int(len(sub)),
+                        "Exact Match Accuracy (%)": round(
+                            _mean_or_nan(answerable.get("em", pd.Series(dtype=float)))
+                            * 100.0,
+                            2,
+                        ),
+                        "F1 Score": round(f1_val, 4) if not np.isnan(f1_val) else "",
+                        "Faithfulness Score": round(
+                            _mean_or_nan(
+                                sub.get("faithfulness", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                        "Context Precision": round(
+                            _mean_or_nan(
+                                sub.get("context_precision", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                        "Context Recall": round(
+                            _mean_or_nan(
+                                sub.get("context_recall", pd.Series(dtype=float))
+                            ),
+                            4,
+                        ),
+                    }
+                )
+            if not per_pipeline_rows:
                 continue
-            answerable = _answerable_subset(sub)
-            f1_val = _mean_or_nan(answerable.get("token_f1", pd.Series(dtype=float)))
-            f1_by_pipeline[pipeline] = f1_val
-            exp_id = (
-                f"{BUCKET_EXP_PREFIX.get(bucket, 'EXP_XX')}_"
-                f"{PIPELINE_EXP_STEM.get(pipeline, pipeline.upper())}"
+            best_pipeline = max(
+                f1_by_pipeline,
+                key=lambda p: (
+                    -1.0 if np.isnan(f1_by_pipeline[p]) else f1_by_pipeline[p]
+                ),
             )
-            per_pipeline_rows.append({
-                "Question Length Bucket": BUCKET_LABEL[bucket],
-                "Word Count Rule": word_count_rule[bucket],
-                "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
-                "Experiment ID": exp_id,
-                "Total Questions": int(len(sub)),
-                "Exact Match Accuracy (%)": round(_mean_or_nan(answerable.get("em", pd.Series(dtype=float))) * 100.0, 2),
-                "F1 Score": round(f1_val, 4) if not np.isnan(f1_val) else "",
-                "Faithfulness Score": round(_mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))), 4),
-                "Context Precision": round(_mean_or_nan(sub.get("context_precision", pd.Series(dtype=float))), 4),
-                "Context Recall": round(_mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))), 4),
-            })
-        if not per_pipeline_rows:
-            continue
-        best_pipeline = max(
-            f1_by_pipeline,
-            key=lambda p: -1.0 if np.isnan(f1_by_pipeline[p]) else f1_by_pipeline[p],
-        )
-        best_f1 = f1_by_pipeline[best_pipeline]
-        observation = (
-            f"Best in bucket: {PIPELINE_LABEL.get(best_pipeline, best_pipeline)} "
-            f"(F1={best_f1:.2f})"
-        )
-        for row in per_pipeline_rows:
-            row["Observation"] = observation
-            rows.append(row)
+            best_f1 = f1_by_pipeline[best_pipeline]
+            observation = (
+                f"Best in bucket at k={int(k)}: "
+                f"{PIPELINE_LABEL.get(best_pipeline, best_pipeline)} "
+                f"(F1={best_f1:.2f})"
+            )
+            for row in per_pipeline_rows:
+                row["Observation"] = observation
+                rows.append(row)
     return pd.DataFrame(rows, columns=TABLE4_COLUMNS)
 
 
 # ---------------------------------------------------------------------------
-# Table 6 — Answerability (k=5, one row per pipeline)
+# Table 6 — Answerability (all k, one row per pipeline/k)
 
 
 TABLE6_COLUMNS = [
-    "Pipeline", "Total Answerable", "Total Unanswerable",
-    "Correctly Answered", "Wrongly Refused", "Wrongly Answered", "Correctly Refused",
-    "Answerability Accuracy", "Hallucination Rate", "Refusal Rate on Answerable",
+    "Pipeline",
+    "K Value",
+    "Total Answerable",
+    "Total Unanswerable",
+    "Correctly Answered",
+    "Wrongly Refused",
+    "Wrongly Answered",
+    "Correctly Refused",
+    "Answerability Accuracy",
+    "Hallucination Rate",
+    "Refusal Rate on Answerable",
 ]
 
 
@@ -424,33 +578,44 @@ def build_table6_answerability(
     per_q: pd.DataFrame,
     ragas_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Table 6 — full confusion-table + hallucination/refusal pair at k=5."""
-    df = _filter_k(per_q, 5)
+    """Table 6 — full confusion-table + hallucination/refusal pair for all k."""
+    df = per_q.copy()
     df = _attach_aggregate_ragas(df, ragas_df)
     df["is_answerable"] = _ensure_bool(df["is_answerable"])
     df["refused"] = _ensure_bool(df["refused"])
 
     rows: list[dict] = []
     for pipeline in _pipeline_order(df["pipeline"].unique()):
-        sub = df[df["pipeline"] == pipeline].copy()
-        if sub.empty:
-            continue
-        n_answerable = int(sub["is_answerable"].sum())
-        n_unanswerable = int((~sub["is_answerable"]).sum())
-        ans_input = sub.assign(is_answerable=sub["is_answerable"].astype(int))
-        table = compute_answerability_table(ans_input)
-        rows.append({
-            "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
-            "Total Answerable": n_answerable,
-            "Total Unanswerable": n_unanswerable,
-            "Correctly Answered": int(table["correctly_answered"].iloc[0]),
-            "Wrongly Refused": int(table["wrongly_refused"].iloc[0]),
-            "Wrongly Answered": int(table["wrongly_answered"].iloc[0]),
-            "Correctly Refused": int(table["correctly_refused"].iloc[0]),
-            "Answerability Accuracy": round(float(table["answerability_acc"].iloc[0]), 4),
-            "Hallucination Rate": round(hallucination_rate(sub), 4),
-            "Refusal Rate on Answerable": round(refusal_rate_on_answerable(sub), 4),
-        })
+        pipeline_rows = df[df["pipeline"] == pipeline].copy()
+        for k in sorted(
+            pd.to_numeric(pipeline_rows["k"], errors="coerce").dropna().unique()
+        ):
+            sub = pipeline_rows[pd.to_numeric(pipeline_rows["k"], errors="coerce") == k]
+            if sub.empty:
+                continue
+            n_answerable = int(sub["is_answerable"].sum())
+            n_unanswerable = int((~sub["is_answerable"]).sum())
+            ans_input = sub.assign(is_answerable=sub["is_answerable"].astype(int))
+            table = compute_answerability_table(ans_input)
+            rows.append(
+                {
+                    "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
+                    "K Value": int(k),
+                    "Total Answerable": n_answerable,
+                    "Total Unanswerable": n_unanswerable,
+                    "Correctly Answered": int(table["correctly_answered"].iloc[0]),
+                    "Wrongly Refused": int(table["wrongly_refused"].iloc[0]),
+                    "Wrongly Answered": int(table["wrongly_answered"].iloc[0]),
+                    "Correctly Refused": int(table["correctly_refused"].iloc[0]),
+                    "Answerability Accuracy": round(
+                        float(table["answerability_acc"].iloc[0]), 4
+                    ),
+                    "Hallucination Rate": round(hallucination_rate(sub), 4),
+                    "Refusal Rate on Answerable": round(
+                        refusal_rate_on_answerable(sub), 4
+                    ),
+                }
+            )
     return pd.DataFrame(rows, columns=TABLE6_COLUMNS)
 
 
@@ -459,10 +624,16 @@ def build_table6_answerability(
 
 
 TABLE7_COLUMNS = [
-    "Pipeline", "Best K", "F1 @ Best K", "Faithfulness @ Best K",
-    "Context Precision @ Best K", "Context Recall @ Best K",
-    "Answerability Accuracy @ Best K", "Avg Latency @ Best K",
-    "Composite Score", "Rank",
+    "Pipeline",
+    "Best K",
+    "F1 @ Best K",
+    "Faithfulness @ Best K",
+    "Context Precision @ Best K",
+    "Context Recall @ Best K",
+    "Answerability Accuracy @ Best K",
+    "Avg Latency @ Best K",
+    "Composite Score",
+    "Rank",
 ]
 
 COMPOSITE_WEIGHTS = {
@@ -490,14 +661,19 @@ def _min_max_norm(values: dict[str, float]) -> dict[str, float]:
 
 
 def _per_pipeline_at_k(
-    per_q: pd.DataFrame, pipeline: str, k: int,
+    per_q: pd.DataFrame,
+    pipeline: str,
+    k: int,
 ) -> dict[str, float]:
     sub = per_q[(per_q["pipeline"] == pipeline) & (per_q["k"] == k)].copy()
     if sub.empty:
         return {
-            "f1": float("nan"), "faithfulness": float("nan"),
-            "context_precision": float("nan"), "context_recall": float("nan"),
-            "answerability_acc": float("nan"), "avg_latency_ms": float("nan"),
+            "f1": float("nan"),
+            "faithfulness": float("nan"),
+            "context_precision": float("nan"),
+            "context_recall": float("nan"),
+            "answerability_acc": float("nan"),
+            "avg_latency_ms": float("nan"),
         }
     sub["is_answerable"] = _ensure_bool(sub["is_answerable"])
     answerable = _answerable_subset(sub)
@@ -507,8 +683,12 @@ def _per_pipeline_at_k(
     return {
         "f1": _mean_or_nan(answerable.get("token_f1", pd.Series(dtype=float))),
         "faithfulness": _mean_or_nan(sub.get("faithfulness", pd.Series(dtype=float))),
-        "context_precision": _mean_or_nan(sub.get("context_precision", pd.Series(dtype=float))),
-        "context_recall": _mean_or_nan(sub.get("context_recall", pd.Series(dtype=float))),
+        "context_precision": _mean_or_nan(
+            sub.get("context_precision", pd.Series(dtype=float))
+        ),
+        "context_recall": _mean_or_nan(
+            sub.get("context_recall", pd.Series(dtype=float))
+        ),
         "answerability_acc": float(ans_table["answerability_acc"].iloc[0]),
         "avg_latency_ms": avg_latency_per_question_ms(sub),
     }
@@ -563,9 +743,12 @@ def build_table7_final_ranking(
             m = _per_pipeline_at_k(df, pipeline, int(k))
             cc = _category_consistency(df, pipeline, int(k))
             crude_score = (
-                _safe(m["f1"]) + _safe(m["faithfulness"])
-                + _safe(m["context_precision"]) + _safe(m["context_recall"])
-                + _safe(m["answerability_acc"]) + _safe(cc)
+                _safe(m["f1"])
+                + _safe(m["faithfulness"])
+                + _safe(m["context_precision"])
+                + _safe(m["context_recall"])
+                + _safe(m["answerability_acc"])
+                + _safe(cc)
             )
             if crude_score > best_score:
                 best_score = crude_score
@@ -574,10 +757,12 @@ def build_table7_final_ranking(
         best_k[pipeline] = chosen_k
         per_pipeline_metrics[pipeline] = chosen_metrics
 
-    latency_norm = _min_max_norm({
-        p: per_pipeline_metrics[p].get("avg_latency_ms", float("nan"))
-        for p in pipelines
-    })
+    latency_norm = _min_max_norm(
+        {
+            p: per_pipeline_metrics[p].get("avg_latency_ms", float("nan"))
+            for p in pipelines
+        }
+    )
 
     composites: dict[str, float] = {}
     for pipeline in pipelines:
@@ -597,19 +782,29 @@ def build_table7_final_ranking(
     rows = []
     for pipeline in pipelines:
         m = per_pipeline_metrics[pipeline]
-        rows.append({
-            "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
-            "Best K": best_k[pipeline],
-            "F1 @ Best K": round(_safe(m.get("f1")), 4),
-            "Faithfulness @ Best K": round(_safe(m.get("faithfulness")), 4),
-            "Context Precision @ Best K": round(_safe(m.get("context_precision")), 4),
-            "Context Recall @ Best K": round(_safe(m.get("context_recall")), 4),
-            "Answerability Accuracy @ Best K": round(_safe(m.get("answerability_acc")), 4),
-            "Avg Latency @ Best K": round(_safe(m.get("avg_latency_ms")), 2),
-            "Composite Score": round(composites[pipeline], 4),
-            "Rank": int(ranks[pipeline]),
-        })
-    return pd.DataFrame(rows, columns=TABLE7_COLUMNS).sort_values("Rank").reset_index(drop=True)
+        rows.append(
+            {
+                "Pipeline": PIPELINE_LABEL.get(pipeline, pipeline),
+                "Best K": best_k[pipeline],
+                "F1 @ Best K": round(_safe(m.get("f1")), 4),
+                "Faithfulness @ Best K": round(_safe(m.get("faithfulness")), 4),
+                "Context Precision @ Best K": round(
+                    _safe(m.get("context_precision")), 4
+                ),
+                "Context Recall @ Best K": round(_safe(m.get("context_recall")), 4),
+                "Answerability Accuracy @ Best K": round(
+                    _safe(m.get("answerability_acc")), 4
+                ),
+                "Avg Latency @ Best K": round(_safe(m.get("avg_latency_ms")), 2),
+                "Composite Score": round(composites[pipeline], 4),
+                "Rank": int(ranks[pipeline]),
+            }
+        )
+    return (
+        pd.DataFrame(rows, columns=TABLE7_COLUMNS)
+        .sort_values("Rank")
+        .reset_index(drop=True)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -617,9 +812,16 @@ def build_table7_final_ranking(
 
 
 PAIRWISE_COLUMNS = [
-    "Pipeline A", "Pipeline B", "Metric",
-    "Median Diff (A - B)", "Wilcoxon W", "p_value", "n_pairs",
-    "Significant at α=0.05", "Significant after Bonferroni (α/10)",
+    "K Value",
+    "Pipeline A",
+    "Pipeline B",
+    "Metric",
+    "Median Diff (A - B)",
+    "Wilcoxon W",
+    "p_value",
+    "n_pairs",
+    "Significant at α=0.05",
+    "Significant after Bonferroni (α/10)",
 ]
 
 
@@ -628,14 +830,14 @@ def build_pairwise_wilcoxon(
     metrics: tuple[str, ...] = ("token_f1", "faithfulness"),
     alpha: float = 0.05,
 ) -> pd.DataFrame:
-    """Pairwise Wilcoxon on per-question scores at k=5 for each metric.
+    """Pairwise Wilcoxon on per-question scores for each k and metric.
 
-    Pairs rows on (record_id, k=5) so the test is properly paired across
+    Pairs rows on (record_id, k) so the test is properly paired across
     pipelines. Bonferroni correction is reported alongside the raw p-value.
     """
     from src.evaluation.statistics import bonferroni_threshold, paired_wilcoxon
 
-    df = _filter_k(per_q, 5)
+    df = per_q.copy()
     if df.empty:
         return pd.DataFrame(columns=PAIRWISE_COLUMNS)
 
@@ -644,34 +846,47 @@ def build_pairwise_wilcoxon(
     bonf = bonferroni_threshold(alpha, max(pair_count, 1))
 
     rows: list[dict] = []
-    for metric in metrics:
-        if metric not in df.columns:
-            continue
-        wide = (
-            df.pivot_table(
-                index="record_id", columns="pipeline",
-                values=metric, aggfunc="mean",
-            )
-            .dropna(how="any")
-        )
-        for i, a in enumerate(pipelines):
-            for b in pipelines[i + 1:]:
-                if a not in wide.columns or b not in wide.columns:
-                    continue
-                series_a = wide[a].astype(float).tolist()
-                series_b = wide[b].astype(float).tolist()
-                result = paired_wilcoxon(series_a, series_b)
-                p = result["p_value"]
-                rows.append({
-                    "Pipeline A": PIPELINE_LABEL.get(a, a),
-                    "Pipeline B": PIPELINE_LABEL.get(b, b),
-                    "Metric": metric,
-                    "Median Diff (A - B)": round(result["median_diff"], 4)
-                        if result["median_diff"] is not None else "",
-                    "Wilcoxon W": result["statistic"] if result["statistic"] is not None else "",
-                    "p_value": p if p is not None else "",
-                    "n_pairs": int(result["n_pairs"]),
-                    "Significant at α=0.05": (p is not None and p < alpha),
-                    "Significant after Bonferroni (α/10)": (p is not None and p < bonf),
-                })
+    for k in sorted(pd.to_numeric(df["k"], errors="coerce").dropna().unique()):
+        k_df = df[pd.to_numeric(df["k"], errors="coerce") == k]
+        for metric in metrics:
+            if metric not in k_df.columns:
+                continue
+            wide = k_df.pivot_table(
+                index="record_id",
+                columns="pipeline",
+                values=metric,
+                aggfunc="mean",
+            ).dropna(how="any")
+            for i, a in enumerate(pipelines):
+                for b in pipelines[i + 1 :]:
+                    if a not in wide.columns or b not in wide.columns:
+                        continue
+                    series_a = wide[a].astype(float).tolist()
+                    series_b = wide[b].astype(float).tolist()
+                    result = paired_wilcoxon(series_a, series_b)
+                    p = result["p_value"]
+                    rows.append(
+                        {
+                            "K Value": int(k),
+                            "Pipeline A": PIPELINE_LABEL.get(a, a),
+                            "Pipeline B": PIPELINE_LABEL.get(b, b),
+                            "Metric": metric,
+                            "Median Diff (A - B)": (
+                                round(result["median_diff"], 4)
+                                if result["median_diff"] is not None
+                                else ""
+                            ),
+                            "Wilcoxon W": (
+                                result["statistic"]
+                                if result["statistic"] is not None
+                                else ""
+                            ),
+                            "p_value": p if p is not None else "",
+                            "n_pairs": int(result["n_pairs"]),
+                            "Significant at α=0.05": (p is not None and p < alpha),
+                            "Significant after Bonferroni (α/10)": (
+                                p is not None and p < bonf
+                            ),
+                        }
+                    )
     return pd.DataFrame(rows, columns=PAIRWISE_COLUMNS)

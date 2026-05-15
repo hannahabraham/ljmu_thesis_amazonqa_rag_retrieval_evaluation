@@ -75,9 +75,7 @@ def _load_full_per_question() -> pd.DataFrame:
     )
 
     if dataframe.empty:
-        raise SystemExit(
-            f"No per-question JSONL found in {PER_QUESTION_DIR}"
-        )
+        raise SystemExit(f"No per-question JSONL found in {PER_QUESTION_DIR}")
 
     return dataframe
 
@@ -133,13 +131,10 @@ def _fill_missing_ragas(per_question: pd.DataFrame) -> pd.DataFrame:
         aggregate_column = f"_agg_{column_name}"
 
         if aggregate_column in per_question.columns:
-            per_question[column_name] = (
-                pd.to_numeric(
-                    per_question[column_name],
-                    errors="coerce",
-                )
-                .fillna(per_question[aggregate_column])
-            )
+            per_question[column_name] = pd.to_numeric(
+                per_question[column_name],
+                errors="coerce",
+            ).fillna(per_question[aggregate_column])
 
     return per_question
 
@@ -148,32 +143,38 @@ def _write_correct_threshold_sensitivity(
     per_question: pd.DataFrame,
 ) -> None:
     """Recompute Correct Answers for multiple F1 thresholds."""
-    k5_dataframe = per_question[per_question["k"] == 5]
-
     rows: list[dict] = []
 
     for pipeline in PIPELINE_KEYS:
-        subset = k5_dataframe[k5_dataframe["pipeline"] == pipeline]
+        pipeline_rows = per_question[per_question["pipeline"] == pipeline]
 
-        if subset.empty:
+        if pipeline_rows.empty:
             continue
 
-        for threshold in CORRECT_F1_SENSITIVITY:
-            rows.append(
-                {
-                    "pipeline": pipeline,
-                    "pipeline_label": PIPELINE_LABEL.get(
-                        pipeline,
-                        pipeline,
-                    ),
-                    "f1_threshold": threshold,
-                    "correct_answers": correct_answers_count(
-                        subset,
-                        threshold,
-                    ),
-                    "total_questions": int(len(subset)),
-                }
-            )
+        for k_value in sorted(
+            pd.to_numeric(pipeline_rows["k"], errors="coerce").dropna().unique()
+        ):
+            subset = pipeline_rows[
+                pd.to_numeric(pipeline_rows["k"], errors="coerce") == k_value
+            ]
+
+            for threshold in CORRECT_F1_SENSITIVITY:
+                rows.append(
+                    {
+                        "pipeline": pipeline,
+                        "pipeline_label": PIPELINE_LABEL.get(
+                            pipeline,
+                            pipeline,
+                        ),
+                        "k": int(k_value),
+                        "f1_threshold": threshold,
+                        "correct_answers": correct_answers_count(
+                            subset,
+                            threshold,
+                        ),
+                        "total_questions": int(len(subset)),
+                    }
+                )
 
     dataframe = pd.DataFrame(rows)
 
@@ -233,10 +234,7 @@ def _write_weight_sensitivity(
 
         if alternate_top != primary_top:
             LOGGER.warning(
-                (
-                    "Ranking changes under %s "
-                    "(top=%s, primary=%s)"
-                ),
+                ("Ranking changes under %s " "(top=%s, primary=%s)"),
                 weight_name,
                 alternate_top,
                 primary_top,

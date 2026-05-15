@@ -21,10 +21,11 @@
        outputs/results.csv                    (legacy cross-pipeline summary)
 
 RAGAS Faithfulness / Context Precision / Context Recall are NOT computed here;
-they come from scripts/18_eval_ragas.py, which writes per-row scores back into
+they come from scripts/step18_eval_ragas.py, which writes per-row scores back into
 the per-question JSONL. The v5 Results Sheet tables are assembled from the JSONL
-by scripts/24_build_results_tables.py.
+by scripts/step23_build_results_tables.py.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,10 +44,8 @@ from config.settings import (
     GROQ_MODEL,
     OUTPUT_DIR,
     PER_QUESTION_DIR,
-    PER_QUESTION_SEED2_DIR,
     PROCESSED_DIR,
     RANDOM_SEED,
-    REPRO_SEED_2,
     pipeline_output_dir,
 )
 from src.evaluation.answerability import compute_answerability_table
@@ -113,7 +112,7 @@ RESULTS_COLUMNS = [
     "ROUGE-L",
     "Semantic Similarity",
     # Faithfulness
-    "Faithfulness Score",       # RAGAS — filled later
+    "Faithfulness Score",  # RAGAS — filled later
     "Hallucination Rate",
     "Groundedness",
     # Efficiency
@@ -168,23 +167,29 @@ def _run_retrieval(pipeline: str, k: int, sample: int | None) -> pd.DataFrame:
         q_bucket = row.get("q_bucket")
         if q_bucket is None or (isinstance(q_bucket, float) and pd.isna(q_bucket)):
             q_bucket = assign_q_bucket(row["question"])
-        rows.append({
-            "golden_id": row["golden_id"],
-            "record_id": row["record_id"],
-            "asin": row["asin"],
-            "category": row.get("category", "unknown"),
-            "q_bucket": q_bucket,
-            "question_type": row.get("question_type", row.get("questionType", "")),
-            "pipeline": pipeline,
-            "k": k,
-            "question": row["question"],
-            "gold_answer": row["golden_answer"],
-            "evidence_doc_id": row.get("evidence_doc_id"),
-            "is_answerable": row.get("answerability"),
-            "retrieved_doc_ids": json.dumps([h.get("doc_id") for h in hits], ensure_ascii=False),
-            "retrieved_context": json.dumps([h.get("text") for h in hits], ensure_ascii=False),
-            "retrieval_ms": retrieval_ms,
-        })
+        rows.append(
+            {
+                "golden_id": row["golden_id"],
+                "record_id": row["record_id"],
+                "asin": row["asin"],
+                "category": row.get("category", "unknown"),
+                "q_bucket": q_bucket,
+                "question_type": row.get("question_type", row.get("questionType", "")),
+                "pipeline": pipeline,
+                "k": k,
+                "question": row["question"],
+                "gold_answer": row["golden_answer"],
+                "evidence_doc_id": row.get("evidence_doc_id"),
+                "is_answerable": row.get("answerability"),
+                "retrieved_doc_ids": json.dumps(
+                    [h.get("doc_id") for h in hits], ensure_ascii=False
+                ),
+                "retrieved_context": json.dumps(
+                    [h.get("text") for h in hits], ensure_ascii=False
+                ),
+                "retrieval_ms": retrieval_ms,
+            }
+        )
 
     out = pipeline_output_dir(pipeline) / f"retrieval_k{k}.csv"
     df = pd.DataFrame(rows)
@@ -200,7 +205,9 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
         contexts = parse_list_field(r["retrieved_context"])
         retrieved_docs = [{"doc_id": d, "text": t} for d, t in zip(doc_ids, contexts)]
         prompts.append(
-            PROMPT_TEMPLATE.format(question=r["question"], context=format_context(retrieved_docs))
+            PROMPT_TEMPLATE.format(
+                question=r["question"], context=format_context(retrieved_docs)
+            )
         )
 
     cached_answers: list[str | None] = []
@@ -223,8 +230,12 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
             pending_prompts.append(prompt)
 
     logger.info(
-        "[%s k=%d] %d/%d cached, %d to call", pipeline, k,
-        len(prompts) - len(pending_idx), len(prompts), len(pending_idx),
+        "[%s k=%d] %d/%d cached, %d to call",
+        pipeline,
+        k,
+        len(prompts) - len(pending_idx),
+        len(prompts),
+        len(pending_idx),
     )
 
     if pending_prompts:
@@ -243,19 +254,22 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
                 set_cached(
                     "groq_rag",
                     {"generated_answer": generated_answer, "generation_ms": ms},
-                    prompts[i], GROQ_MODEL,
+                    prompts[i],
+                    GROQ_MODEL,
                 )
 
     rows: list[dict[str, Any]] = []
     for i, (_, r) in enumerate(retrieval_df.iterrows()):
         ans = cached_answers[i] or ""
         ms = float(cached_latency[i] or 0.0)
-        rows.append({
-            **r.to_dict(),
-            "generated_answer": ans,
-            "refused": is_refusal(ans),
-            "generation_ms": ms,
-        })
+        rows.append(
+            {
+                **r.to_dict(),
+                "generated_answer": ans,
+                "refused": is_refusal(ans),
+                "generation_ms": ms,
+            }
+        )
 
     out = pipeline_output_dir(pipeline) / f"answers_k{k}.csv"
     df = pd.DataFrame(rows)
@@ -280,7 +294,7 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
 
     Returns a dict keyed by `RESULTS_COLUMNS` headers (where applicable). RAGAS
     Faithfulness / Context Precision / Context Recall are intentionally left out
-    of the dict — they come from scripts/18_eval_ragas.py.
+    of the dict — they come from scripts/step18_eval_ragas.py.
     """
     df = answers_df.copy()
     df["retrieved_doc_ids"] = df["retrieved_doc_ids"].apply(parse_list_field)
@@ -315,9 +329,18 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
     # ---------- Answer quality (only on answerable rows) ----------
     answerable = df[df["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"]
     if len(answerable):
-        ems = [exact_match(r["generated_answer"], r["gold_answer"]) for _, r in answerable.iterrows()]
-        f1s = [token_f1(r["generated_answer"], r["gold_answer"]) for _, r in answerable.iterrows()]
-        rouges = [rouge_l(r["generated_answer"], r["gold_answer"]) for _, r in answerable.iterrows()]
+        ems = [
+            exact_match(r["generated_answer"], r["gold_answer"])
+            for _, r in answerable.iterrows()
+        ]
+        f1s = [
+            token_f1(r["generated_answer"], r["gold_answer"])
+            for _, r in answerable.iterrows()
+        ]
+        rouges = [
+            rouge_l(r["generated_answer"], r["gold_answer"])
+            for _, r in answerable.iterrows()
+        ]
         sims = semantic_similarity(
             answerable["generated_answer"].fillna("").tolist(),
             answerable["gold_answer"].fillna("").tolist(),
@@ -332,7 +355,9 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
         em_pct = f1_mean = rouge_mean = sim_mean = float("nan")
 
     # ---------- Faithfulness (lexical) ----------
-    refused_flags = df["refused"].astype(bool).tolist() if "refused" in df.columns else None
+    refused_flags = (
+        df["refused"].astype(bool).tolist() if "refused" in df.columns else None
+    )
     grounded_mean = aggregate_groundedness(
         df["generated_answer"].fillna("").tolist(),
         df["retrieved_context"].tolist(),
@@ -348,7 +373,9 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
     ans_df = df[df["is_answerable"].notna()].copy()
     if len(ans_df):
         ans_df["is_answerable"] = ans_df["is_answerable"].astype(int)
-        answerability_acc = float(compute_answerability_table(ans_df)["answerability_acc"].iloc[0])
+        answerability_acc = float(
+            compute_answerability_table(ans_df)["answerability_acc"].iloc[0]
+        )
     else:
         answerability_acc = float("nan")
 
@@ -381,7 +408,9 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
         "Retrieval Latency (s)": _round_or_blank(retrieval_latency_s, digits=3),
         # Robustness
         "Answerability Accuracy": _round_or_blank(answerability_acc),
-        "Long Context Accuracy": _round_or_blank(long_ctx["long_context_answerability"]),
+        "Long Context Accuracy": _round_or_blank(
+            long_ctx["long_context_answerability"]
+        ),
         "Noise Robustness": _round_or_blank(noise["noise_robust_f1"]),
     }
 
@@ -406,7 +435,7 @@ def _upsert_pipeline_summary(pipeline: str, k: int, metrics: dict[str, Any]) -> 
         "pipeline_key": pipeline,
         "K Value": int(k),
         **metrics,
-        "Faithfulness Score": "",   # RAGAS merge later
+        "Faithfulness Score": "",  # RAGAS merge later
         "Context Precision": "",
         "Context Recall": "",
     }
@@ -417,7 +446,11 @@ def _upsert_pipeline_summary(pipeline: str, k: int, metrics: dict[str, Any]) -> 
         df = pd.read_csv(path)
         mask = (df["pipeline_key"] == pipeline) & (df["K Value"] == k)
         if mask.any():
-            for ragas_col in ("Faithfulness Score", "Context Precision", "Context Recall"):
+            for ragas_col in (
+                "Faithfulness Score",
+                "Context Precision",
+                "Context Recall",
+            ):
                 existing = df.loc[mask, ragas_col].iloc[0]
                 if pd.notna(existing) and str(existing).strip() != "":
                     new_row[ragas_col] = existing
@@ -426,7 +459,11 @@ def _upsert_pipeline_summary(pipeline: str, k: int, metrics: dict[str, Any]) -> 
     else:
         df = pd.DataFrame([new_row])
 
-    df = df.reindex(columns=RESULTS_COLUMNS).sort_values(["K Value"]).reset_index(drop=True)
+    df = (
+        df.reindex(columns=RESULTS_COLUMNS)
+        .sort_values(["K Value"])
+        .reset_index(drop=True)
+    )
     df.to_csv(path, index=False)
     logger.info("Upserted %s/k=%d into %s", pipeline, k, path)
 
@@ -436,7 +473,7 @@ def upsert_results_row(pipeline: str, k: int, metrics: dict[str, Any]) -> None:
 
     Faithfulness / Context Precision / Context Recall are left blank here. The
     v5 Results Sheet tables come from the per-question JSONL via
-    scripts/24_build_results_tables.py; this CSV is kept as a quick-glance
+    scripts/step23_build_results_tables.py; this CSV is kept as a quick-glance
     cross-pipeline snapshot only.
     """
     path = OUTPUT_DIR / "results.csv"
@@ -461,7 +498,11 @@ def upsert_results_row(pipeline: str, k: int, metrics: dict[str, Any]) -> None:
                 df[col] = ""
         mask = (df["pipeline_key"] == pipeline) & (df["K Value"] == k)
         if mask.any():
-            for ragas_col in ("Faithfulness Score", "Context Precision", "Context Recall"):
+            for ragas_col in (
+                "Faithfulness Score",
+                "Context Precision",
+                "Context Recall",
+            ):
                 existing = df.loc[mask, ragas_col].iloc[0]
                 if pd.notna(existing) and str(existing).strip() != "":
                     new_row[ragas_col] = existing
@@ -495,10 +536,16 @@ def _write_per_question_jsonl(
         contexts = parse_list_field(r.get("retrieved_context"))
         gold_answer = r.get("gold_answer", "")
         generated_answer = r.get("generated_answer", "") or ""
-        em = exact_match(generated_answer, gold_answer) \
-            if gold_answer not in (None, "", "[UNANSWERABLE]") else 0
-        f1 = token_f1(generated_answer, gold_answer) \
-            if gold_answer not in (None, "", "[UNANSWERABLE]") else 0.0
+        em = (
+            exact_match(generated_answer, gold_answer)
+            if gold_answer not in (None, "", "[UNANSWERABLE]")
+            else 0
+        )
+        f1 = (
+            token_f1(generated_answer, gold_answer)
+            if gold_answer not in (None, "", "[UNANSWERABLE]")
+            else 0.0
+        )
         is_ans_raw = r.get("is_answerable")
         if isinstance(is_ans_raw, (int, np.integer, float, np.floating)):
             is_answerable = bool(int(is_ans_raw)) if not pd.isna(is_ans_raw) else False
@@ -551,14 +598,13 @@ def run_pipeline_cell(
     """Run retrieval + generation + per-cell eval for one (pipeline, k) cell.
 
     Per-question records are written to ``output_dir`` (defaults to
-    ``outputs/per_question/`` for seed=RANDOM_SEED, or
-    ``outputs/per_question_seed2/`` for seed=REPRO_SEED_2).
+    ``outputs/per_question/``).
     """
     if pipeline not in PIPELINE_LABEL:
         raise ValueError(f"unknown pipeline {pipeline!r}")
 
     if output_dir is None:
-        output_dir = PER_QUESTION_SEED2_DIR if seed == REPRO_SEED_2 else PER_QUESTION_DIR
+        output_dir = PER_QUESTION_DIR
 
     logger.info("=== %s k=%d seed=%d ===", pipeline, k, seed)
     retrieval_df = _run_retrieval(pipeline, k, sample)
@@ -572,11 +618,17 @@ def run_pipeline_cell(
     logger.info(
         "[%s k=%d] EM=%s%% F1=%s Hit=%s Recall=%s MRR=%s nDCG=%s "
         "ROUGE-L=%s Sim=%s Halluc=%s Ans=%s LongCtx=%s Noise=%s Lat=%ss",
-        pipeline, k,
-        metrics.get("Exact Match Accuracy (%)"), metrics.get("F1 Score"),
-        metrics.get("Hit@K"), metrics.get("Recall@K"), metrics.get("MRR"),
-        metrics.get("nDCG@K"), metrics.get("ROUGE-L"),
-        metrics.get("Semantic Similarity"), metrics.get("Hallucination Rate"),
+        pipeline,
+        k,
+        metrics.get("Exact Match Accuracy (%)"),
+        metrics.get("F1 Score"),
+        metrics.get("Hit@K"),
+        metrics.get("Recall@K"),
+        metrics.get("MRR"),
+        metrics.get("nDCG@K"),
+        metrics.get("ROUGE-L"),
+        metrics.get("Semantic Similarity"),
+        metrics.get("Hallucination Rate"),
         metrics.get("Answerability Accuracy"),
         metrics.get("Long Context Accuracy"),
         metrics.get("Noise Robustness"),

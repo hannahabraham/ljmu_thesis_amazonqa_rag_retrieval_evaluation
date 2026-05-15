@@ -2,7 +2,7 @@
 
 These are *lexical* approximations computed from the retrieved context and the
 generated answer. They are cheap (no LLM calls), so we can compute them on every
-(pipeline, k) cell — unlike RAGAS faithfulness which only runs at k=5.
+(pipeline, k) cell and compare them with RAGAS faithfulness where available.
 
 Conventions
 -----------
@@ -18,6 +18,7 @@ groundedness for paraphrases, so the *trend* across pipelines is more reliable
 than the absolute score. RAGAS faithfulness (LLM-as-judge) remains the headline
 faithfulness number.
 """
+
 from __future__ import annotations
 
 import re
@@ -25,8 +26,7 @@ import string
 from typing import Iterable, Sequence
 
 # Common English stop words — small list, kept inline to avoid an NLTK download.
-_STOPWORDS: frozenset[str] = frozenset(
-    """
+_STOPWORDS: frozenset[str] = frozenset("""
     a about above after again against all am an and any are as at be because been
     before being below between both but by can did do does doing down during each
     few for from further had has have having he her here hers herself him himself
@@ -35,8 +35,7 @@ _STOPWORDS: frozenset[str] = frozenset(
     should so some such than that the their theirs them themselves then there
     these they this those through to too under until up very was we were what when
     where which while who whom why will with you your yours yourself yourselves
-    """.split()
-)
+    """.split())
 
 _TOKEN_RX = re.compile(r"[a-z0-9]+")
 
@@ -89,7 +88,11 @@ def aggregate_hallucination_rate(
     """
     answers_list = list(answers)
     context_lists_list = list(context_lists)
-    refused_list = list(refused_flags) if refused_flags is not None else [False] * len(answers_list)
+    refused_list = (
+        list(refused_flags)
+        if refused_flags is not None
+        else [False] * len(answers_list)
+    )
     if not (len(answers_list) == len(context_lists_list) == len(refused_list)):
         raise ValueError("answers, contexts, refused_flags must align in length")
 
@@ -113,7 +116,11 @@ def aggregate_groundedness(
     """Mean groundedness across non-refusal rows."""
     answers_list = list(answers)
     context_lists_list = list(context_lists)
-    refused_list = list(refused_flags) if refused_flags is not None else [False] * len(answers_list)
+    refused_list = (
+        list(refused_flags)
+        if refused_flags is not None
+        else [False] * len(answers_list)
+    )
 
     scores: list[float] = []
     for ans, ctx, refused in zip(answers_list, context_lists_list, refused_list):

@@ -6,8 +6,6 @@ generates answers with Groq, computes evaluation metrics, and writes results.
 Examples:
     python -m scripts.step12_run_dense --ks 5
     python -m scripts.step12_run_dense --ks 1 3 5 10 --seed 42
-    python -m scripts.step12_run_dense --ks 5 --seed 137 \
-        --output-dir outputs/per_question_seed2
 """
 
 from __future__ import annotations

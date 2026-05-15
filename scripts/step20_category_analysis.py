@@ -1,4 +1,4 @@
-"""Compute category-level F1 and answerability metrics at k=5.
+"""Compute category-level F1 and answerability metrics for all k values.
 
 Only categories in ``NAMED_CATEGORIES`` are included in this analysis.
 Rows outside that set still contribute to the other result tables.
@@ -11,6 +11,7 @@ import logging
 import pandas as pd
 
 from config.settings import (
+    K_VALUES,
     NAMED_CATEGORIES,
     OUTPUT_DIR,
     PER_QUESTION_DIR,
@@ -27,28 +28,24 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _load_named_category_rows() -> pd.DataFrame:
-    """Load k=5 per-question rows restricted to named categories."""
+    """Load per-question rows restricted to named categories."""
     per_question = load_per_question(
         PER_QUESTION_DIR,
         pipelines=list(PIPELINE_KEYS),
-        ks=[5],
+        ks=list(K_VALUES),
         seed=RANDOM_SEED,
     )
 
     if per_question.empty:
         LOGGER.error(
-            "No per-question JSONL found at %s for k=5",
+            "No per-question JSONL found at %s",
             PER_QUESTION_DIR,
         )
         return pd.DataFrame()
 
-    per_question = per_question[
-        per_question["category"].isin(NAMED_CATEGORIES)
-    ].copy()
+    per_question = per_question[per_question["category"].isin(NAMED_CATEGORIES)].copy()
 
-    per_question["is_answerable"] = (
-        per_question["is_answerable"].astype(bool)
-    )
+    per_question["is_answerable"] = per_question["is_answerable"].astype(bool)
 
     return per_question
 
@@ -75,9 +72,7 @@ def _answerable_f1_ci(group: pd.DataFrame) -> tuple[float, float, float]:
 def _answerability_accuracy(group: pd.DataFrame) -> float:
     """Compute answerability accuracy for a grouped subset."""
     answerability_table = compute_answerability_table(
-        group.assign(
-            is_answerable=group["is_answerable"].astype(int)
-        )
+        group.assign(is_answerable=group["is_answerable"].astype(int))
     )
 
     return float(answerability_table["answerability_acc"].iloc[0])
@@ -93,19 +88,18 @@ def main() -> None:
         return
 
     for pipeline in PIPELINE_KEYS:
-        pipeline_rows = per_question[
-            per_question["pipeline"] == pipeline
-        ]
+        pipeline_rows = per_question[per_question["pipeline"] == pipeline]
 
         if pipeline_rows.empty:
             continue
 
-        for category, group in pipeline_rows.groupby("category"):
+        for (k_value, category), group in pipeline_rows.groupby(["k", "category"]):
             f1_mean, lower_bound, upper_bound = _answerable_f1_ci(group)
 
             rows.append(
                 {
                     "pipeline": pipeline,
+                    "k": int(k_value),
                     "category": category,
                     "n": len(group),
                     "f1": f1_mean,

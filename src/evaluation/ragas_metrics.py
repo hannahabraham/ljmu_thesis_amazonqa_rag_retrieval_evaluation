@@ -1,4 +1,5 @@
-"""RAGAS wiring: faithfulness, context_precision, context_recall (k=5 only)."""
+"""RAGAS wiring: faithfulness, context_precision, context_recall."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,7 +11,7 @@ from src.llm_clients.ragas_judge import build_ragas_judge
 
 def run_ragas(results_df: pd.DataFrame, workers: int | None = None) -> Any:
     """Evaluate a results DataFrame with the columns:
-        question, answer, contexts (list[str]), ground_truth.
+    question, answer, contexts (list[str]), ground_truth.
     """
     from datasets import Dataset
     from ragas import evaluate

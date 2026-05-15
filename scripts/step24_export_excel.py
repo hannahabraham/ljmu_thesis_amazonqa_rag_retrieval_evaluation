@@ -21,7 +21,6 @@ SHEETS: dict[str, Path] = {
     "Table6_Answerability": TABLES_DIR / "table6_answerability.csv",
     "Table7_Final_Ranking": TABLES_DIR / "table7_final_ranking.csv",
     "Pairwise_Wilcoxon": TABLES_DIR / "pairwise_wilcoxon.csv",
-    "Reproducibility_Drift": TABLES_DIR / "reproducibility_drift.csv",
     "RAGAS_Raw": OUTPUT_DIR / "ragas_metrics.csv",
     "Correct_Threshold_Sweep": OUTPUT_DIR / "correct_threshold_sensitivity.csv",
     "Composite_Weight_Sweep": OUTPUT_DIR / "composite_weight_sensitivity.csv",

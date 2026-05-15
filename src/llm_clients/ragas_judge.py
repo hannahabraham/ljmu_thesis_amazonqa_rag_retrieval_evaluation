@@ -22,6 +22,7 @@ def build_ragas_judge() -> tuple[Any, Any, int]:
             keys=gemini_keys,
             model=GEMINI_JUDGE_MODEL,
             temperature=0.0,
+            interactive_replacement=False,
         )
     )
 
@@ -31,6 +32,8 @@ def build_ragas_judge() -> tuple[Any, Any, int]:
         )
     )
 
-    worker_count = len(gemini_keys)
+    # The wrapper intentionally uses one active Gemini key. Keep the default
+    # conservative; callers can opt into more workers from the CLI.
+    worker_count = 1
 
     return judge_llm, embeddings, worker_count

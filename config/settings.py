@@ -25,7 +25,6 @@ OUTPUT_DIR = PROJECT_ROOT / "outputs"
 EDA_PLOTS_DIR = OUTPUT_DIR / "eda_plots"
 TABLES_DIR = OUTPUT_DIR / "tables"
 PER_QUESTION_DIR = OUTPUT_DIR / "per_question"
-PER_QUESTION_SEED2_DIR = OUTPUT_DIR / "per_question_seed2"
 
 PIPELINE_KEYS: tuple[str, ...] = (
     "bm25",
@@ -68,16 +67,13 @@ for directory in (
     EDA_PLOTS_DIR,
     TABLES_DIR,
     PER_QUESTION_DIR,
-    PER_QUESTION_SEED2_DIR,
 ):
     directory.mkdir(parents=True, exist_ok=True)
 
 for pipeline_key in PIPELINE_KEYS:
     (OUTPUT_DIR / pipeline_key).mkdir(parents=True, exist_ok=True)
 
-# Reproducibility
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", "42"))
-REPRO_SEED_2 = int(os.getenv("REPRO_SEED_2", "137"))
 
 # Models
 GROQ_MODEL = os.getenv(
@@ -158,6 +154,17 @@ CORRECT_F1_SENSITIVITY = (0.3, 0.5, 0.7)
 
 K_VALUES = (1, 3, 5, 10)
 RRF_K = 60
+
+# RAGAS evaluation
+RAGAS_BATCH_SIZE = int(os.getenv("RAGAS_BATCH_SIZE", "10"))
+RAGAS_SLEEP_BETWEEN_BATCHES = float(
+    os.getenv("RAGAS_SLEEP_BETWEEN_BATCHES", "15")
+)
+RAGAS_MAX_RETRIES = int(os.getenv("RAGAS_MAX_RETRIES", "5"))
+RAGAS_BACKOFF_SECONDS = float(os.getenv("RAGAS_BACKOFF_SECONDS", "30"))
+RAGAS_BACKOFF_MULTIPLIER = float(
+    os.getenv("RAGAS_BACKOFF_MULTIPLIER", "2")
+)
 
 # Chunking
 PASSAGE_CHUNK_TOKENS = 200
