@@ -127,6 +127,27 @@ def _apply_judge_result(
     return record
 
 
+def _normalise_answerability(record: dict[str, Any]) -> dict[str, Any]:
+    """Derive answerability and clear evidence fields based on golden_answer.
+
+    Enforces the invariant validated by :func:`validate_golden_consistency`:
+      * golden_answer == "[UNANSWERABLE]"  <=> answerability == 0
+      * unanswerable rows carry null evidence_doc_id and evidence_text.
+
+    The AmazonQA ``is_answerable`` flag is *advisory* and can disagree with
+    the gold answer (the judge or grounding step may overrule it). The gold
+    answer is the source of truth here, so we always re-derive.
+    """
+    gold = str(record.get("golden_answer", "")).strip().upper()
+    if gold == "[UNANSWERABLE]":
+        record["answerability"] = 0
+        record["evidence_doc_id"] = None
+        record["evidence_text"] = None
+    else:
+        record["answerability"] = 1
+    return record
+
+
 def main() -> None:
     """Resolve flagged rows and save the verified golden dataset."""
     draft_path = PROCESSED_DIR / "golden_dataset_200_draft.csv"
@@ -189,7 +210,7 @@ def main() -> None:
                     "verification_status": "heuristic",
                 }
             )
-            verified_by_record[record_id] = record
+            verified_by_record[record_id] = _normalise_answerability(record)
             _write_partial(verified_by_record, record_order, partial_path)
             LOGGER.info(
                 "Processed row %d/%d without judge (record_id=%s, golden_id=%s)",
@@ -236,10 +257,12 @@ def main() -> None:
                 GEMINI_JUDGE_MODEL,
             )
 
-        verified_by_record[record_id] = _apply_judge_result(
-            record,
-            judged,
-            evidence_lookup,
+        verified_by_record[record_id] = _normalise_answerability(
+            _apply_judge_result(
+                record,
+                judged,
+                evidence_lookup,
+            )
         )
         judged_done += 1
         _write_partial(verified_by_record, record_order, partial_path)

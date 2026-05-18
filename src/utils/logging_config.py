@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +17,6 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def configure_logging(level: int = logging.INFO) -> None:
     """Configure application-wide logging."""
-
     root_logger = logging.getLogger()
 
     # Prevent duplicate handlers

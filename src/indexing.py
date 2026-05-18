@@ -1,11 +1,9 @@
-"""Build BM25 and Qdrant retrieval indexes."""
+"""Build Qdrant retrieval indexes and provide the BM25 tokenizer."""
 
 from __future__ import annotations
 
 import logging
-import pickle
 import re
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -14,7 +12,6 @@ import pandas as pd
 from config.settings import (
     EMBEDDING_DIM,
     EMBEDDING_MODEL,
-    INDEX_DIR,
     QDRANT_COLLECTIONS,
     QDRANT_HOST,
     QDRANT_PORT,
@@ -28,43 +25,6 @@ QDRANT_UPSERT_BATCH_SIZE = 512
 def tokenize(text: str) -> list[str]:
     """Tokenize text for BM25 indexing."""
     return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def build_bm25_index(
-    passage_chunks: pd.DataFrame,
-    out_path: Path = INDEX_DIR / "bm25.pkl",
-) -> Path:
-    """Build and persist a BM25 index for passage chunks."""
-    from rank_bm25 import BM25Okapi  # pylint: disable=import-outside-toplevel
-
-    tokenized_corpus = [
-        tokenize(text)
-        for text in passage_chunks["text"].tolist()
-    ]
-
-    bm25 = BM25Okapi(tokenized_corpus)
-
-    payload = {
-        "bm25": bm25,
-        "chunk_ids": passage_chunks["chunk_id"].tolist(),
-        "doc_ids": passage_chunks["doc_id"].tolist(),
-        "record_ids": passage_chunks["record_id"].tolist(),
-        "asins": passage_chunks["asin"].tolist(),
-        "texts": passage_chunks["text"].tolist(),
-    }
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with out_path.open("wb") as file_handle:
-        pickle.dump(payload, file_handle)
-
-    LOGGER.info(
-        "BM25 index pickled to %s (%d documents)",
-        out_path,
-        len(tokenized_corpus),
-    )
-
-    return out_path
 
 
 def get_qdrant_client() -> Any:

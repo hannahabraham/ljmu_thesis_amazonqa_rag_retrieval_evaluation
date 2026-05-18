@@ -1,2 +1,0 @@
-Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
-Sentence Window Retrieval,sentwin,5,200,0,0.5515,0.5515,0.3206,0.3779,0.0,0.1231,0.119,0.3539,0.4469,0.5531,0.665,0.016,0.595,0.5625,0.1007

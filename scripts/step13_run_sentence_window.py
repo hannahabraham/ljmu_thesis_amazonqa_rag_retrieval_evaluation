@@ -5,6 +5,7 @@ Writes per-question outputs using run IDs such as ``sentwin_k5_seed42``.
 Examples:
     python -m scripts.step13_run_sentence_window --ks 5
     python -m scripts.step13_run_sentence_window --ks 1 3 5 10 --seed 42
+
 """
 
 from __future__ import annotations

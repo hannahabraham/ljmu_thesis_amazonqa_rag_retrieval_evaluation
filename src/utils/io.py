@@ -23,13 +23,21 @@ def _strip_numpy_repr(text: str) -> str:
 
 
 def parse_list_field(value: Any) -> list[Any]:
-    """Best-effort parse a field that may be a list, JSON string, or Python literal."""
+    """Best-effort parse a field that may be a list, JSON string, or Python literal.
+
+    Returns ``[]`` for empty / NaN / sentinel values. If the string parses to a
+    non-list object (e.g. a JSON dict from a serialisation bug), returns ``[]``
+    rather than wrapping it — wrapping a dict in a list silently corrupts
+    downstream consumers that iterate doc IDs / contexts.
+    """
     if value is None:
         return []
     if isinstance(value, np.ndarray):
         return list(value)
     if isinstance(value, list):
         return value
+    if isinstance(value, tuple):
+        return list(value)
     if isinstance(value, float) and pd.isna(value):
         return []
     if not isinstance(value, str):
@@ -42,13 +50,22 @@ def parse_list_field(value: Any) -> list[Any]:
         for parser in (json.loads, ast.literal_eval):
             try:
                 parsed = parser(candidate)
-                return parsed if isinstance(parsed, list) else [parsed]
             except (json.JSONDecodeError, ValueError, SyntaxError):
                 continue
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, tuple):
+                return list(parsed)
+            # Parsed successfully but produced a scalar / dict / something else.
+            # Fall back to treating the raw text as a single-element list, which
+            # preserves behaviour for legacy "scalar in a list field" rows
+            # without smuggling dicts into list consumers.
+            return [text]
     return [text]
 
 
 def write_jsonl(rows: Iterable[dict[str, Any]], path: Path) -> int:
+    """Write rows to JSON Lines, creating parent directories. Return rows written."""
     path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
     with path.open("w", encoding="utf-8") as handle:
@@ -59,6 +76,7 @@ def write_jsonl(rows: Iterable[dict[str, Any]], path: Path) -> int:
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read JSON Lines from path and return them as a list of dicts."""
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:

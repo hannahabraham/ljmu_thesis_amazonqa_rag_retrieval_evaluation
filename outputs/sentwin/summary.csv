@@ -1,5 +1,5 @@
-Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
-Sentence Window Retrieval,sentwin,1,200,0,0.1765,0.1765,0.1765,0.1765,,,0.0,0.111,0.1103,0.3061,,0.5832,0.4168,0.34,0.019,0.575,0.5375,0.1012
-Sentence Window Retrieval,sentwin,3,200,0,0.4338,0.4338,0.3064,0.3388,,,0.0,0.1246,0.1201,0.3609,,0.5022,0.4978,0.378,0.018,0.58,0.5625,0.1101
-Sentence Window Retrieval,sentwin,5,200,0,0.5515,0.5515,0.3206,0.3779,,,0.0,0.1231,0.119,0.3539,,0.4469,0.5531,0.665,0.016,0.595,0.5625,0.1007
-Sentence Window Retrieval,sentwin,10,200,0,0.7721,0.7721,0.341,0.4424,,,0.0,0.1274,0.1203,0.3554,,0.3859,0.6141,0.429,0.018,0.605,0.575,0.1232
+Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Yes/No EM (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Generation Latency (s),Retrieval p95 (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
+Sentence Window Retrieval,sentwin,1,200,58,0.2857,0.2857,0.2857,,,10.34,0.1299,0.1184,0.3229,,0.6347,0.3653,0.313,0.018,0.295,0.037,0.67,0.617,0.1252
+Sentence Window Retrieval,sentwin,3,200,62,0.5238,0.373,0.4117,,,20.69,0.1251,0.114,0.322,,0.5377,0.4623,0.31,0.017,0.293,0.034,0.68,0.6809,0.1272
+Sentence Window Retrieval,sentwin,5,200,63,0.6032,0.4053,0.4547,,,6.9,0.1213,0.1104,0.3317,,0.4906,0.5094,0.337,0.017,0.32,0.034,0.695,0.6915,0.1223
+Sentence Window Retrieval,sentwin,10,200,62,0.8254,0.4277,0.5213,,,20.69,0.1315,0.1128,0.3591,,0.4306,0.5694,0.367,0.017,0.35,0.033,0.705,0.7234,0.14

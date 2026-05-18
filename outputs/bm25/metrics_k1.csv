@@ -1,2 +1,0 @@
-Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
-BM25 Retrieval,bm25,1,200,0,0.2059,0.2059,0.2059,0.2059,0.0,0.1179,0.1137,0.3205,0.5461,0.4539,0.293,0.002,0.56,0.5125,0.1046

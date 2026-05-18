@@ -28,6 +28,7 @@ def _gold_set(evidence: object) -> set[str]:
 
 
 def hit_at_k(retrieved_doc_ids: Sequence[str], evidence_doc_id: object, k: int) -> int:
+    """Return 1 if any gold evidence doc appears in the top-k retrieved ids."""
     gold = _gold_set(evidence_doc_id)
     return int(any(d in gold for d in _as_list(retrieved_doc_ids)[:k]))
 
@@ -46,6 +47,7 @@ def recall_at_k(retrieved_doc_ids: Sequence[str], evidence_doc_id: object, k: in
 
 
 def reciprocal_rank(retrieved_doc_ids: Sequence[str], evidence_doc_id: object) -> float:
+    """Return 1/rank of first gold doc in retrieved list; 0 if none, NaN if no gold."""
     gold = _gold_set(evidence_doc_id)
     if not gold:
         return float("nan")
@@ -56,6 +58,7 @@ def reciprocal_rank(retrieved_doc_ids: Sequence[str], evidence_doc_id: object) -
 
 
 def dcg_at_k(retrieved_doc_ids: Sequence[str], evidence_doc_id: object, k: int) -> float:
+    """Discounted cumulative gain at k under binary relevance, deduped by doc id."""
     gold = _gold_set(evidence_doc_id)
     if not gold:
         return float("nan")

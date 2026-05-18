@@ -21,6 +21,7 @@ faithfulness number.
 
 from __future__ import annotations
 
+import math
 import re
 import string
 from typing import Iterable, Sequence
@@ -71,7 +72,7 @@ def groundedness(answer: str, contexts: Sequence[str]) -> float:
 def hallucination_rate_row(answer: str, contexts: Sequence[str]) -> float:
     """Per-row hallucination = 1 - groundedness. NaN for empty answers."""
     g = groundedness(answer, contexts)
-    if g != g:  # NaN
+    if math.isnan(g):
         return float("nan")
     return 1.0 - g
 
@@ -101,7 +102,7 @@ def aggregate_hallucination_rate(
         if refused:
             continue
         rate = hallucination_rate_row(ans, ctx)
-        if rate == rate:  # not NaN
+        if not math.isnan(rate):
             rates.append(rate)
     if not rates:
         return float("nan")
@@ -121,13 +122,15 @@ def aggregate_groundedness(
         if refused_flags is not None
         else [False] * len(answers_list)
     )
+    if len({len(answers_list), len(context_lists_list), len(refused_list)}) != 1:
+        raise ValueError("answers, contexts, refused_flags must align in length")
 
     scores: list[float] = []
     for ans, ctx, refused in zip(answers_list, context_lists_list, refused_list):
         if refused:
             continue
         g = groundedness(ans, ctx)
-        if g == g:
+        if not math.isnan(g):
             scores.append(g)
     if not scores:
         return float("nan")

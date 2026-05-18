@@ -10,13 +10,15 @@ from src.llm_clients.ragas_judge import build_ragas_judge
 
 
 def run_ragas(results_df: pd.DataFrame, workers: int | None = None) -> Any:
-    """Evaluate a results DataFrame with the columns:
-    question, answer, contexts (list[str]), ground_truth.
+    """Evaluate a results DataFrame with RAGAS faithfulness and context metrics.
+
+    Expected columns: question, answer, contexts (list[str]), ground_truth.
     """
-    from datasets import Dataset
     from ragas import evaluate
     from ragas.metrics import context_precision, context_recall, faithfulness
     from ragas.run_config import RunConfig
+
+    from datasets import Dataset
 
     judge_llm, embeddings, n_keys = build_ragas_judge()
     worker_count = max(1, int(workers or n_keys))

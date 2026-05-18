@@ -21,6 +21,7 @@ class GeminiKeyManager:
         temperature: float = 0.0,
         max_retries: int = 2,
     ) -> None:
+        """Initialise the manager with one or more API keys (first non-empty wins)."""
         if isinstance(api_keys, str):
             api_key = api_keys.strip()
         else:

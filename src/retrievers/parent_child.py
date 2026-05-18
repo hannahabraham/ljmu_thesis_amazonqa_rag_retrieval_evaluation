@@ -6,11 +6,14 @@ and return full parent text for generation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Sequence
 
 from config.settings import QDRANT_COLLECTIONS
 from src.indexing import get_embedder, get_qdrant_client
 from src.retrievers.base import Retriever
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ParentChildRetriever(Retriever):
@@ -107,5 +110,15 @@ class ParentChildRetriever(Retriever):
 
             if len(results) >= k:
                 break
+
+        if len(results) < k:
+            LOGGER.warning(
+                "Parent-child retriever returned %d/%d parents for asin=%s "
+                "(child_pool=%d). Consider raising child_pool_multiplier.",
+                len(results),
+                k,
+                asin,
+                k * self._pool_multiplier,
+            )
 
         return results

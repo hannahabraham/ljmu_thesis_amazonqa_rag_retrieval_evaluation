@@ -16,12 +16,12 @@ from config.settings import (
 )
 from src.evaluation.faithfulness import groundedness, hallucination_rate_row
 from src.evaluation.generation_metrics import (
-    bertscore_f1,
-    exact_match,
     rouge_l,
     semantic_similarity,
     token_f1,
+    yesno_em,
 )
+from src.evaluation.latency import latency_detail
 from src.evaluation.statistics import bootstrap_ci
 from src.utils.io import parse_list_field
 from src.utils.logging_config import configure_logging
@@ -60,14 +60,14 @@ def _bootstrap_metric(values: list[float]) -> tuple[float, float, float]:
 
 
 def _compute_answer_metrics(dataframe: pd.DataFrame) -> dict[str, Any]:
-    """Compute generation-quality metrics on answerable rows."""
+    """Compute generation-quality metrics on answerable rows.
+
+    Token-F1 / ROUGE-L / Semantic Similarity span all answerable rows.
+    Yes/No EM is computed on the yes/no slice only (gold answer starts with
+    "yes" or "no" after normalisation).
+    """
     generated = dataframe["generated_answer"].fillna("").tolist()
     gold = dataframe["gold_answer"].fillna("").tolist()
-
-    exact_matches = [
-        exact_match(row["generated_answer"], row["gold_answer"])
-        for _, row in dataframe.iterrows()
-    ]
 
     token_f1_scores = [
         token_f1(row["generated_answer"], row["gold_answer"])
@@ -79,34 +79,59 @@ def _compute_answer_metrics(dataframe: pd.DataFrame) -> dict[str, Any]:
         for _, row in dataframe.iterrows()
     ]
 
-    bert_scores = bertscore_f1(generated, gold)
     similarity_scores = semantic_similarity(generated, gold)
 
-    em_mean, em_lower, em_upper = _bootstrap_metric(
-        [float(value) for value in exact_matches]
-    )
     f1_mean, f1_lower, f1_upper = _bootstrap_metric(token_f1_scores)
     rouge_mean, rouge_lower, rouge_upper = _bootstrap_metric(rouge_scores)
-    bert_mean, bert_lower, bert_upper = _bootstrap_metric(bert_scores)
     sim_mean, sim_lower, sim_upper = _bootstrap_metric(similarity_scores)
 
+    yesno_mask = dataframe["gold_answer"].astype(str).str.strip().str.lower().str.match(
+        r"^(yes|no)\b"
+    )
+    yesno_subset = dataframe[yesno_mask.fillna(False)]
+    yesno_scores = [
+        float(yesno_em(row["generated_answer"], row["gold_answer"]))
+        for _, row in yesno_subset.iterrows()
+    ]
+    if yesno_scores:
+        yesno_mean, yesno_lower, yesno_upper = _bootstrap_metric(yesno_scores)
+        yesno_correct = int(sum(yesno_scores))
+    else:
+        yesno_mean = yesno_lower = yesno_upper = float("nan")
+        yesno_correct = 0
+
     return {
-        "em": em_mean,
-        "em_lo": em_lower,
-        "em_hi": em_upper,
-        "em_correct": int(sum(exact_matches)),
+        "yesno_em": yesno_mean,
+        "yesno_em_lo": yesno_lower,
+        "yesno_em_hi": yesno_upper,
+        "yesno_em_n": int(len(yesno_subset)),
+        "yesno_em_correct": yesno_correct,
         "f1": f1_mean,
         "f1_lo": f1_lower,
         "f1_hi": f1_upper,
         "rouge_l": rouge_mean,
         "rouge_l_lo": rouge_lower,
         "rouge_l_hi": rouge_upper,
-        "bertscore_f1": bert_mean,
-        "bertscore_f1_lo": bert_lower,
-        "bertscore_f1_hi": bert_upper,
         "semantic_similarity": sim_mean,
         "semantic_similarity_lo": sim_lower,
         "semantic_similarity_hi": sim_upper,
+    }
+
+
+def _compute_latency_metrics(dataframe: pd.DataFrame) -> dict[str, float]:
+    """Mean + p50/p95 latency for retrieval, generation, and total."""
+    detail = latency_detail(
+        dataframe.assign(
+            total_ms=dataframe["retrieval_ms"].astype(float)
+            + dataframe["generation_ms"].astype(float)
+        )
+    )
+    retrieval_mean = float(dataframe["retrieval_ms"].astype(float).mean())
+    generation_mean = float(dataframe["generation_ms"].astype(float).mean())
+    return {
+        "retrieval_ms_mean": retrieval_mean,
+        "generation_ms_mean": generation_mean,
+        **detail,
     }
 
 
@@ -161,41 +186,10 @@ def _compute_faithfulness_metrics(
     }
 
 
-def _upsert_pipeline_metrics(
-    pipeline: str,
-    row: dict[str, Any],
-) -> None:
-    """Write or update per-pipeline generation metrics."""
-    output_path = pipeline_output_dir(pipeline) / "generation_metrics.csv"
-
-    if output_path.exists():
-        existing = pd.read_csv(output_path)
-    else:
-        existing = pd.DataFrame()
-
-    if not existing.empty:
-        existing = existing[
-            ~(
-                (existing["pipeline"] == row["pipeline"])
-                & (existing["k"] == row["k"])
-            )
-        ]
-
-    output = (
-        pd.concat(
-            [existing, pd.DataFrame([row])],
-            ignore_index=True,
-        )
-        .sort_values("k")
-        .reset_index(drop=True)
-    )
-
-    output.to_csv(output_path, index=False)
-
-
 def main() -> None:
     """Compute and save generation metrics for all pipelines and k values."""
     rows: list[dict[str, Any]] = []
+    latency_rows: list[dict[str, Any]] = []
 
     for pipeline, k_value in product(PIPELINE_KEYS, K_VALUES):
         full_dataframe = _load_answers(pipeline, k_value)
@@ -208,23 +202,28 @@ def main() -> None:
         if answerable_dataframe.empty:
             continue
 
-        row = {
+        latency = _compute_latency_metrics(full_dataframe)
+        rows.append({
             "pipeline": pipeline,
             "k": k_value,
             "n": len(answerable_dataframe),
             **_compute_answer_metrics(answerable_dataframe),
             **_compute_faithfulness_metrics(full_dataframe),
-        }
+        })
 
-        rows.append(row)
-
-        _upsert_pipeline_metrics(pipeline, row)
+        latency_rows.append(
+            {"pipeline": pipeline, "k": k_value, "n": len(full_dataframe), **latency}
+        )
 
     output_path = OUTPUT_DIR / "generation_metrics.csv"
 
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
     LOGGER.info("Wrote %s", output_path)
+
+    latency_path = OUTPUT_DIR / "latency_detail.csv"
+    pd.DataFrame(latency_rows).to_csv(latency_path, index=False)
+    LOGGER.info("Wrote %s", latency_path)
 
 
 if __name__ == "__main__":

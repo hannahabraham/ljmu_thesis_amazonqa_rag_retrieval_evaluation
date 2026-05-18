@@ -17,6 +17,12 @@ LOGGER = logging.getLogger(__name__)
 JEFFREYS_TIE_DELTA = 0.05
 GROUNDING_JACCARD_THRESHOLD = 0.1
 
+# Rows whose top candidate's Jaccard to the best KB review falls below this
+# (stricter) bar still go to the judge even when nominally "grounded",
+# because token Jaccard at 0.1 misses ungrounded yes/no answers like "yes"
+# that incidentally share stopwords with a review.
+JUDGE_REVIEW_JACCARD_THRESHOLD = 0.2
+
 JUDGE_PROMPT = """You are evaluating candidate answers to an Amazon product question.
 Your task is to pick the single best answer that is GROUNDED in the review evidence,
 or to mark the question as unanswerable if no review supports any candidate.
@@ -150,8 +156,28 @@ def needs_judge_flag(
     scored: list[dict[str, Any]],
     top_grounded: bool,
     is_answerable: int | None,
+    *,
+    question_type: str | None = None,
+    top_grounding_score: float | None = None,
 ) -> bool:
-    """Return whether a row should be sent to the LLM judge."""
+    """Return whether a row should be sent to the LLM judge.
+
+    Aggressive gating (supervisor brief 2026-05-16): we route to the judge
+    whenever any of the following is true. The judge is cheap on Gemini
+    Flash; the cost of a wrong heuristic-pick is much higher.
+
+    Triggers:
+      * no candidate answers at all
+      * every candidate has zero helpful votes
+      * top candidate is not grounded in the KB (Jaccard < 0.1)
+      * top candidate is grounded but only weakly (Jaccard < 0.2) - the
+        0.1 threshold is too loose for short answers like "yes"/"no"
+      * Jeffreys score is tied within ``JEFFREYS_TIE_DELTA``
+      * answerability is missing or marked unanswerable (``is_answerable``
+        in ``{None, 0}``) - heuristics can't confirm "no answer in reviews"
+      * question type is "yesno" - heuristic picks are weakest here
+        because vote distributions for short answers are noisy
+    """
     if not scored:
         return True
 
@@ -162,13 +188,22 @@ def needs_judge_flag(
         return True
 
     if (
+        top_grounding_score is not None
+        and top_grounding_score < JUDGE_REVIEW_JACCARD_THRESHOLD
+    ):
+        return True
+
+    if (
         len(scored) >= 2
         and abs(scored[0]["jeffreys"] - scored[1]["jeffreys"])
         < JEFFREYS_TIE_DELTA
     ):
         return True
 
-    if is_answerable is None:
+    if is_answerable is None or is_answerable == 0:
+        return True
+
+    if question_type is not None and str(question_type).strip().lower() == "yesno":
         return True
 
     return False
@@ -186,15 +221,17 @@ def build_draft_row(
     kb_doc_ids = kb_for_record["doc_id"].tolist()
 
     top_grounded = False
+    top_grounding_score = 0.0
     evidence_doc_id: str | None = None
     evidence_text: str | None = None
 
     if scored:
-        grounded, best_index_text, _ = is_grounded(
+        grounded, best_index_text, jaccard_score = is_grounded(
             scored[0]["text"],
             kb_texts,
         )
         top_grounded = grounded
+        top_grounding_score = jaccard_score
 
         if grounded and best_index_text is not None:
             best_index = int(best_index_text)
@@ -205,6 +242,8 @@ def build_draft_row(
         scored,
         top_grounded,
         record_row.get("is_answerable"),
+        question_type=record_row.get("questionType"),
+        top_grounding_score=top_grounding_score,
     )
 
     selection_method = "grounded_pick" if top_grounded else "jeffreys"
@@ -341,56 +380,109 @@ def format_judge_prompt(
 def validate_golden_consistency(
     golden_df: pd.DataFrame,
     kb_df: pd.DataFrame,
-) -> None:
-    """Validate that golden evidence references match the KB."""
+) -> pd.DataFrame:
+    """Validate golden evidence references against the KB.
+
+    Two severities:
+
+    Hard failures (raise ``ValueError`` at the end if any are found):
+      * ``answerability`` column is missing on a row.
+      * answerable row has null ``evidence_doc_id``.
+      * ``evidence_doc_id`` does not exist in the KB.
+      * ``evidence_text`` has drifted from the KB record verbatim.
+
+    Soft warnings (logged + recorded in ``validation_status`` on the
+    returned frame, no exception raised):
+      * ``golden_answer == "[UNANSWERABLE]"`` but ``answerability == 1``,
+        or vice versa. The advisory AmazonQA label and the judge/grounding
+        outcome can legitimately disagree (see ``_normalise_answerability``
+        in step08a) — flag for review rather than failing the dataset.
+      * unanswerable row carries a non-null ``evidence_doc_id``.
+
+    Returns:
+        A copy of ``golden_df`` with a ``validation_status`` column
+        (``"ok"``, ``"label_mismatch"``, ``"unanswerable_with_evidence"``,
+        ``"multiple_warnings"``).
+
+    """
     kb_lookup = kb_df.set_index("doc_id")["review_text"].to_dict()
-    issues: list[tuple[str, str]] = []
+    hard_issues: list[tuple[str, str]] = []
+    statuses: list[str] = []
 
     for _, row in golden_df.iterrows():
         golden_id = row["golden_id"]
+        row_warnings: list[str] = []
 
-        if row["golden_answer"] == "[UNANSWERABLE]":
-            if pd.notna(row["evidence_doc_id"]):
-                issues.append(
-                    (
-                        golden_id,
-                        "unanswerable row has non-null evidence_doc_id",
-                    )
-                )
-            continue
-
-        doc_id = row["evidence_doc_id"]
-
-        if pd.isna(doc_id):
-            issues.append(
-                (
-                    golden_id,
-                    "answerable row has null evidence_doc_id",
-                )
-            )
-            continue
-
-        kb_text = kb_lookup.get(doc_id)
-
-        if kb_text is None:
-            issues.append(
-                (
-                    golden_id,
-                    f"evidence_doc_id={doc_id} not in KB",
-                )
-            )
-            continue
-
-        if str(row["evidence_text"]).strip() != kb_text.strip():
-            issues.append(
-                (
-                    golden_id,
-                    f"evidence_text drifted from KB[{doc_id}]",
-                )
-            )
-
-    if issues:
-        raise ValueError(
-            "Golden dataset inconsistent: "
-            f"{len(issues)} issues -- {issues[:5]}"
+        is_unanswerable = (
+            str(row["golden_answer"]).strip().upper() == "[UNANSWERABLE]"
         )
+        answerability = row.get("answerability")
+        if pd.isna(answerability):
+            hard_issues.append((golden_id, "answerability is missing"))
+            statuses.append("hard_failure")
+            continue
+        answerability_flag = int(answerability)
+
+        if is_unanswerable and answerability_flag != 0:
+            row_warnings.append("label_mismatch")
+        elif (not is_unanswerable) and answerability_flag != 1:
+            row_warnings.append("label_mismatch")
+
+        if is_unanswerable:
+            if pd.notna(row["evidence_doc_id"]):
+                row_warnings.append("unanswerable_with_evidence")
+        else:
+            doc_id = row["evidence_doc_id"]
+
+            if pd.isna(doc_id):
+                hard_issues.append(
+                    (golden_id, "answerable row has null evidence_doc_id")
+                )
+                statuses.append("hard_failure")
+                continue
+
+            kb_text = kb_lookup.get(doc_id)
+
+            if kb_text is None:
+                hard_issues.append(
+                    (golden_id, f"evidence_doc_id={doc_id} not in KB")
+                )
+                statuses.append("hard_failure")
+                continue
+
+            if str(row["evidence_text"]).strip() != kb_text.strip():
+                hard_issues.append(
+                    (golden_id, f"evidence_text drifted from KB[{doc_id}]")
+                )
+                statuses.append("hard_failure")
+                continue
+
+        if not row_warnings:
+            statuses.append("ok")
+        elif len(row_warnings) == 1:
+            statuses.append(row_warnings[0])
+        else:
+            statuses.append("multiple_warnings")
+
+    annotated = golden_df.copy()
+    annotated["validation_status"] = statuses
+
+    soft_counts = (
+        annotated["validation_status"]
+        .value_counts()
+        .to_dict()
+    )
+    LOGGER.info(
+        "Golden validation: %s",
+        ", ".join(
+            f"{status}={count}" for status, count in soft_counts.items()
+        ),
+    )
+
+    if hard_issues:
+        raise ValueError(
+            "Golden dataset has hard integrity failures: "
+            f"{len(hard_issues)} issues -- {hard_issues[:5]}"
+        )
+
+    return annotated

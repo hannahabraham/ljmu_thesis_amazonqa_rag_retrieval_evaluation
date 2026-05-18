@@ -16,7 +16,7 @@ import re
 import string
 from collections import Counter
 from functools import lru_cache
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import pandas as pd
 
@@ -42,10 +42,12 @@ def normalise_answer(text: object) -> str:
 
 
 def exact_match(prediction: str, gold: str) -> int:
+    """Return 1 if SQuAD-normalised prediction equals SQuAD-normalised gold, else 0."""
     return int(normalise_answer(prediction) == normalise_answer(gold))
 
 
 def token_f1(prediction: str, gold: str) -> float:
+    """Return SQuAD-style token-level F1 between prediction and gold."""
     pred_tokens = normalise_answer(prediction).split()
     gold_tokens = normalise_answer(gold).split()
     if not pred_tokens and not gold_tokens:
@@ -69,29 +71,6 @@ def rouge_l(prediction: str, gold: str) -> float:
         return float("nan")
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
     return scorer.score(_safe_text(gold), _safe_text(prediction))["rougeL"].fmeasure
-
-
-def bertscore_f1(predictions: Iterable[str], golds: Iterable[str]) -> list[float]:
-    """BERTScore F1 for a batch; returns NaNs if bert_score isn't installed."""
-    preds = [_safe_text(p) for p in predictions]
-    refs = [_safe_text(g) for g in golds]
-    try:
-        from bert_score import score
-    except ImportError:
-        return [float("nan")] * len(preds)
-    if not preds:
-        return []
-    # bert-score 0.3.13 crashes on empty strings against transformers>=5
-    # (RobertaTokenizer.build_inputs_with_special_tokens was removed). It strips
-    # input first, so a literal placeholder word is needed (a space gets stripped
-    # back to empty). Zero-out those pairs after scoring.
-    _PLACEHOLDER = "empty"
-    empty = [not p.strip() or not r.strip() for p, r in zip(preds, refs)]
-    safe_preds = [p if p.strip() else _PLACEHOLDER for p in preds]
-    safe_refs = [r if r.strip() else _PLACEHOLDER for r in refs]
-    _, _, f1 = score(safe_preds, safe_refs, lang="en", rescale_with_baseline=False)
-    scores = f1.tolist()
-    return [0.0 if e else s for s, e in zip(scores, empty)]
 
 
 @lru_cache(maxsize=1)

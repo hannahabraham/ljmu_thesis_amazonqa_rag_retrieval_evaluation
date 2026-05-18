@@ -67,7 +67,7 @@ def refusal_rate_on_answerable(per_q: pd.DataFrame) -> float:
 def hallucination_refusal_pair(
     per_q: pd.DataFrame, faithfulness_per_row: pd.Series | None = None,
 ) -> dict[str, float]:
-    """Convenience: return both metrics as a dict."""
+    """Return hallucination rate and refusal-on-answerable rate as a dict."""
     return {
         "hallucination_rate": hallucination_rate(per_q, faithfulness_per_row),
         "refusal_rate_on_answerable": refusal_rate_on_answerable(per_q),
@@ -75,4 +75,5 @@ def hallucination_refusal_pair(
 
 
 def is_nan(value: float) -> bool:
+    """Return True if value is a NaN float."""
     return isinstance(value, float) and math.isnan(value)

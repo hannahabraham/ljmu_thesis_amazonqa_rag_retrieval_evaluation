@@ -9,6 +9,7 @@ from src.generation.refusal import is_refusal
 
 
 def format_context(retrieved_docs: list[dict]) -> str:
+    """Format retrieved docs into the bracketed-id block consumed by PROMPT_TEMPLATE."""
     return "\n\n".join(
         f"[{doc.get('doc_id', doc.get('chunk_id', '?'))}]\n{doc.get('text', '')}"
         for doc in retrieved_docs
@@ -21,6 +22,7 @@ def generate_rag_answer(
     groq_manager: Any,
     retrieval_ms: float,
 ) -> dict:
+    """Generate one RAG answer and return generated text, refusal flag, and latencies."""
     prompt = PROMPT_TEMPLATE.format(
         question=question, context=format_context(retrieved_docs),
     )

@@ -41,6 +41,7 @@ def wilson_ci(successes: int, n: int, confidence: float = 0.95) -> tuple[float, 
 
 
 def is_indicative(n: int) -> bool:
+    """Return True if the sample is too small to report a stable point estimate."""
     return n < INDICATIVE_THRESHOLD
 
 

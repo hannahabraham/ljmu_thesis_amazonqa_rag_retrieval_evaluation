@@ -62,6 +62,38 @@ def load_single_key(
     return prompt_for_key(service_name)
 
 
+def load_all_keys(
+    service_name: str,
+    primary_env_name: str,
+    numbered_prefix: str,
+) -> list[str]:
+    """Load every available API key, ordered: primary first, then numbered."""
+    keys: list[str] = []
+
+    primary_value = os.getenv(primary_env_name, "").strip()
+    if primary_value:
+        keys.append(primary_value)
+
+    numbered_names = sorted(
+        (
+            name
+            for name, value in os.environ.items()
+            if name.startswith(numbered_prefix) and value.strip()
+        ),
+        key=_numbered_key_sort,
+    )
+
+    for name in numbered_names:
+        value = os.environ[name].strip()
+        if value and value not in keys:
+            keys.append(value)
+
+    if keys:
+        return keys
+
+    return [prompt_for_key(service_name)]
+
+
 def load_groq_key() -> str:
     """Load one Groq API key."""
     return load_single_key("Groq", "GROQ_API_KEY", "GROQ_API_KEY_")
@@ -73,10 +105,10 @@ def load_gemini_key() -> str:
 
 
 def load_groq_keys() -> list[str]:
-    """Load one Groq API key, wrapped for existing call sites."""
-    return [load_groq_key()]
+    """Load every available Groq API key for rotation."""
+    return load_all_keys("Groq", "GROQ_API_KEY", "GROQ_API_KEY_")
 
 
 def load_gemini_keys() -> list[str]:
-    """Load one Gemini API key, wrapped for existing call sites."""
-    return [load_gemini_key()]
+    """Load every available Gemini API key for rotation."""
+    return load_all_keys("Gemini", "GEMINI_API_KEY", "GEMINI_API_KEY_")

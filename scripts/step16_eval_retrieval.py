@@ -15,7 +15,6 @@ from config.settings import (
     pipeline_output_dir,
 )
 from src.evaluation.retrieval_metrics import (
-    hit_at_k,
     ndcg_at_k,
     recall_at_k,
     reciprocal_rank,
@@ -60,11 +59,6 @@ def _compute_metric_row(
     k_value: int,
 ) -> dict[str, Any]:
     """Compute retrieval metrics for one pipeline/k value."""
-    hits = [
-        hit_at_k(row["retrieved_doc_ids"], row["evidence_doc_id"], k_value)
-        for _, row in dataframe.iterrows()
-    ]
-
     recalls = [
         recall_at_k(row["retrieved_doc_ids"], row["evidence_doc_id"], k_value)
         for _, row in dataframe.iterrows()
@@ -80,9 +74,6 @@ def _compute_metric_row(
         for _, row in dataframe.iterrows()
     ]
 
-    hit_mean, hit_lower, hit_upper = _metric_ci(
-        [float(value) for value in hits]
-    )
     recall_mean, recall_lower, recall_upper = _metric_ci(
         [float(value) for value in recalls]
     )
@@ -97,9 +88,6 @@ def _compute_metric_row(
         "pipeline": pipeline,
         "k": k_value,
         "n": len(dataframe),
-        "hit_at_k": hit_mean,
-        "hit_at_k_lo": hit_lower,
-        "hit_at_k_hi": hit_upper,
         "recall_at_k": recall_mean,
         "recall_at_k_lo": recall_lower,
         "recall_at_k_hi": recall_upper,
@@ -112,38 +100,6 @@ def _compute_metric_row(
     }
 
 
-def _upsert_pipeline_metrics(
-    pipeline: str,
-    row: dict[str, Any],
-) -> None:
-    """Write or update the per-pipeline retrieval metrics CSV."""
-    output_path = pipeline_output_dir(pipeline) / "retrieval_metrics.csv"
-
-    if output_path.exists():
-        existing = pd.read_csv(output_path)
-    else:
-        existing = pd.DataFrame()
-
-    if not existing.empty:
-        existing = existing[
-            ~(
-                (existing["pipeline"] == row["pipeline"])
-                & (existing["k"] == row["k"])
-            )
-        ]
-
-    output = (
-        pd.concat(
-            [existing, pd.DataFrame([row])],
-            ignore_index=True,
-        )
-        .sort_values("k")
-        .reset_index(drop=True)
-    )
-
-    output.to_csv(output_path, index=False)
-
-
 def main() -> None:
     """Compute and save retrieval metrics for all pipelines and k values."""
     rows: list[dict[str, Any]] = []
@@ -154,18 +110,7 @@ def main() -> None:
         if dataframe.empty:
             continue
 
-        row = _compute_metric_row(
-            dataframe,
-            pipeline,
-            k_value,
-        )
-
-        rows.append(row)
-
-        _upsert_pipeline_metrics(
-            pipeline,
-            row,
-        )
+        rows.append(_compute_metric_row(dataframe, pipeline, k_value))
 
     output_path = OUTPUT_DIR / "retrieval_metrics.csv"
 

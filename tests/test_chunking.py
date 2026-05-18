@@ -58,10 +58,14 @@ def test_sentence_chunks_carry_neighbours() -> None:
 
     sentences = build_sentence_chunks(knowledge_base)
 
+    # pandas coerces None to NaN in object/string columns when the DataFrame is
+    # built from dict rows, so edge sentinels surface as NaN at the consumer.
+    # SentenceWindowRetriever.get_window_ids handles both forms (None and NaN),
+    # but downstream consumers should always use pd.isna() rather than identity.
     assert len(sentences) == 3
-    assert sentences.iloc[0]["prev_sent_id"] is None
-    assert sentences.iloc[0]["next_sent_id"] is not None
-    assert sentences.iloc[-1]["next_sent_id"] is None
+    assert pd.isna(sentences.iloc[0]["prev_sent_id"])
+    assert not pd.isna(sentences.iloc[0]["next_sent_id"])
+    assert pd.isna(sentences.iloc[-1]["next_sent_id"])
 
 
 def test_parent_child_includes_full_parent_text() -> None:

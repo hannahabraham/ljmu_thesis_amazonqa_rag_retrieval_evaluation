@@ -1,5 +1,5 @@
-Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
-BM25 Retrieval,bm25,1,200,0,0.2059,0.2059,0.2059,0.2059,,,0.0,0.1179,0.1137,0.3205,,0.5461,0.4539,0.293,0.002,0.56,0.5125,0.1046
-BM25 Retrieval,bm25,3,200,0,0.4044,0.4044,0.2868,0.3167,,,0.0,0.1185,0.1186,0.355,,0.4745,0.5255,0.359,0.002,0.61,0.55,0.1049
-BM25 Retrieval,bm25,5,200,0,0.5221,0.5221,0.314,0.3654,,,0.0,0.1152,0.113,0.3303,,0.4367,0.5633,0.359,0.002,0.63,0.6,0.0998
-BM25 Retrieval,bm25,10,200,0,0.8824,0.8824,0.361,0.4809,,,0.0,0.1276,0.1192,0.3557,,0.3916,0.6084,0.546,0.002,0.625,0.5625,0.1348
+Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Yes/No EM (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Generation Latency (s),Retrieval p95 (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
+BM25 Retrieval,bm25,1,200,63,0.1746,0.1746,0.1746,,,6.9,0.1117,0.1038,0.2755,,0.5697,0.4303,0.32,0.002,0.319,0.004,0.63,0.5638,0.1099
+BM25 Retrieval,bm25,3,200,64,0.4921,0.3108,0.3572,,,17.24,0.1281,0.1129,0.3349,,0.4757,0.5243,0.317,0.002,0.315,0.004,0.7,0.6809,0.1156
+BM25 Retrieval,bm25,5,200,67,0.5873,0.3315,0.3955,,,17.24,0.1327,0.1194,0.3476,,0.4119,0.5881,0.344,0.002,0.342,0.004,0.735,0.7234,0.1135
+BM25 Retrieval,bm25,10,200,64,0.8968,0.3714,0.4941,,,24.14,0.1391,0.1248,0.3646,,0.3677,0.6323,0.354,0.002,0.352,0.004,0.73,0.7234,0.1426

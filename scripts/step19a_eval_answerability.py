@@ -82,47 +82,12 @@ def _compute_answerability_metrics(dataframe: pd.DataFrame) -> dict | None:
     }
 
 
-def _upsert_pipeline_metrics(
-    pipeline: str,
-    row: dict,
-) -> None:
-    """Write or update the per-pipeline answerability metrics CSV."""
-    output_path = pipeline_output_dir(pipeline) / "answerability_metrics.csv"
-
-    if output_path.exists():
-        existing = pd.read_csv(output_path)
-    else:
-        existing = pd.DataFrame()
-
-    if not existing.empty:
-        existing = existing[
-            ~(
-                (existing["pipeline"] == row["pipeline"])
-                & (existing["k"] == row["k"])
-            )
-        ]
-
-    output = (
-        pd.concat(
-            [existing, pd.DataFrame([row])],
-            ignore_index=True,
-        )
-        .sort_values("k")
-        .reset_index(drop=True)
-    )
-
-    output.to_csv(output_path, index=False)
-
-
 def main() -> None:
     """Compute and save answerability metrics for all pipelines and k values."""
     rows: list[dict] = []
 
     for pipeline, k_value in product(PIPELINE_KEYS, K_VALUES):
-        full_dataframe = _load_answers(
-            pipeline,
-            k_value,
-        )
+        full_dataframe = _load_answers(pipeline, k_value)
 
         if full_dataframe.empty:
             continue
@@ -132,20 +97,13 @@ def main() -> None:
         if answerability is None:
             continue
 
-        row = {
+        rows.append({
             "pipeline": pipeline,
             "k": k_value,
             **answerability,
             **long_context_metrics(full_dataframe),
             **noise_robustness_metrics(full_dataframe, k_value),
-        }
-
-        rows.append(row)
-
-        _upsert_pipeline_metrics(
-            pipeline,
-            row,
-        )
+        })
 
     output_path = OUTPUT_DIR / "answerability_metrics.csv"
 

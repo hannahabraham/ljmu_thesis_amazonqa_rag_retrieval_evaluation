@@ -15,7 +15,6 @@
        Efficiency    : Avg Latency, Retrieval Latency
        Robustness    : Answerability Accuracy, Long-Context Accuracy,
                        Noise-Robust F1, Clean-vs-Noisy F1 delta
-       → outputs/<pipeline>/metrics_k<k>.csv  (one-row metric snapshot)
   5. Upsert one row into:
        outputs/<pipeline>/summary.csv         (this pipeline's k-sweep)
        outputs/results.csv                    (legacy cross-pipeline summary)
@@ -54,14 +53,16 @@ from src.evaluation.faithfulness import (
     aggregate_hallucination_rate,
 )
 from src.evaluation.generation_metrics import (
+    correct_answers_count,
     exact_match,
     is_correct,
     rouge_l,
     semantic_similarity,
     token_f1,
+    yesno_em,
 )
+from src.evaluation.latency import latency_detail
 from src.evaluation.retrieval_metrics import (
-    hit_at_k,
     ndcg_at_k,
     recall_at_k,
     reciprocal_rank,
@@ -71,7 +72,7 @@ from src.generation.prompt import PROMPT_TEMPLATE
 from src.generation.rag_generator import format_context
 from src.generation.refusal import is_refusal
 from src.llm_clients.loader import load_groq_keys
-from src.llm_clients.parallel_groq import ParallelGroqClient
+from src.llm_clients.parallel_groq import GroqClient
 from src.retrievers.base import Retriever
 from src.retrievers.bm25 import BM25Retriever
 from src.retrievers.dense import DenseRetriever
@@ -99,7 +100,6 @@ RESULTS_COLUMNS = [
     "Total Questions",
     "Correct Answers",
     # Retrieval
-    "Hit@K",
     "Recall@K",
     "MRR",
     "nDCG@K",
@@ -107,7 +107,7 @@ RESULTS_COLUMNS = [
     "Context Precision",
     "Context Recall",
     # Answer quality
-    "Exact Match Accuracy (%)",
+    "Yes/No EM (%)",
     "F1 Score",
     "ROUGE-L",
     "Semantic Similarity",
@@ -118,6 +118,8 @@ RESULTS_COLUMNS = [
     # Efficiency
     "Avg Latency / Question (s)",
     "Retrieval Latency (s)",
+    "Generation Latency (s)",
+    "Retrieval p95 (s)",
     # Robustness
     "Answerability Accuracy",
     "Long Context Accuracy",
@@ -129,16 +131,17 @@ def _build_retriever(
     pipeline: str,
     passage_chunks: pd.DataFrame,
     sentence_chunks: pd.DataFrame,
+    bm25_retriever: BM25Retriever | None = None,
 ) -> Retriever:
     if pipeline == "bm25":
-        return BM25Retriever(passage_chunks, text_col="text")
+        return bm25_retriever or BM25Retriever(passage_chunks, text_col="text")
     if pipeline == "dense":
         return DenseRetriever()
     if pipeline == "sentwin":
         return SentenceWindowRetriever(sentence_chunks)
     if pipeline == "hybrid":
         return HybridRetriever(
-            bm25=BM25Retriever(passage_chunks, text_col="text"),
+            bm25=bm25_retriever or BM25Retriever(passage_chunks, text_col="text"),
             dense=DenseRetriever(),
         )
     if pipeline == "pc":
@@ -146,16 +149,64 @@ def _build_retriever(
     raise ValueError(f"unknown pipeline {pipeline!r}")
 
 
+# Module-level caches so repeated cells in one process don't re-read CSVs from
+# disk or re-tokenise the BM25 corpus. Each cache key is the source CSV path so
+# rebuilding after a chunk regeneration works without restarting Python.
+_GOLDEN_CACHE: dict[Path, pd.DataFrame] = {}
+_CHUNKS_CACHE: dict[Path, pd.DataFrame] = {}
+_BM25_CACHE: dict[Path, BM25Retriever] = {}
+
+
+def _load_cached_csv(path: Path, cache: dict[Path, pd.DataFrame]) -> pd.DataFrame:
+    """Return a cached DataFrame for ``path``, loading once per process."""
+    if path not in cache:
+        cache[path] = pd.read_csv(path)
+    return cache[path]
+
+
+def _get_bm25_retriever(passage_path: Path) -> BM25Retriever:
+    """Return a cached BM25Retriever.
+
+    Prefers the on-disk pickle at ``BM25_PICKLE_PATH`` when it is newer than
+    the passage-chunks CSV; otherwise rebuilds from the CSV and refreshes the
+    pickle so future processes hit the cache.
+    """
+    from config.settings import BM25_PICKLE_PATH
+
+    if passage_path in _BM25_CACHE:
+        return _BM25_CACHE[passage_path]
+
+    pickle_fresh = (
+        BM25_PICKLE_PATH.exists()
+        and passage_path.exists()
+        and BM25_PICKLE_PATH.stat().st_mtime >= passage_path.stat().st_mtime
+    )
+    if pickle_fresh:
+        retriever = BM25Retriever.load(BM25_PICKLE_PATH)
+    else:
+        passage = _load_cached_csv(passage_path, _CHUNKS_CACHE)
+        retriever = BM25Retriever(passage, text_col="text")
+        retriever.save(BM25_PICKLE_PATH)
+
+    _BM25_CACHE[passage_path] = retriever
+    return retriever
+
+
 def _run_retrieval(pipeline: str, k: int, sample: int | None) -> pd.DataFrame:
     from src.sampling import assign_q_bucket
 
-    golden = pd.read_csv(PROCESSED_DIR / "golden_dataset_200_verified.csv")
+    golden_path = PROCESSED_DIR / "golden_dataset_200_verified.csv"
+    passage_path = PROCESSED_DIR / "passage_chunks.csv"
+    sentence_path = PROCESSED_DIR / "sentence_chunks.csv"
+
+    golden = _load_cached_csv(golden_path, _GOLDEN_CACHE)
     if sample:
         golden = golden.head(sample)
 
-    passage = pd.read_csv(PROCESSED_DIR / "passage_chunks.csv")
-    sentence = pd.read_csv(PROCESSED_DIR / "sentence_chunks.csv")
-    retriever = _build_retriever(pipeline, passage, sentence)
+    passage = _load_cached_csv(passage_path, _CHUNKS_CACHE)
+    sentence = _load_cached_csv(sentence_path, _CHUNKS_CACHE)
+    bm25_retriever = _get_bm25_retriever(passage_path) if pipeline in {"bm25", "hybrid"} else None
+    retriever = _build_retriever(pipeline, passage, sentence, bm25_retriever)
 
     rows: list[dict[str, Any]] = []
     for _, row in golden.iterrows():
@@ -239,7 +290,7 @@ def _run_generation(retrieval_df: pd.DataFrame, pipeline: str, k: int) -> pd.Dat
     )
 
     if pending_prompts:
-        client = ParallelGroqClient(
+        client = GroqClient(
             api_keys=load_groq_keys(),
             model=GROQ_MODEL,
             temperature=GENERATION_TEMPERATURE,
@@ -303,10 +354,6 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
     # ---------- Retrieval ----------
     answerable_with_evidence = df[df["evidence_doc_id"].notna()]
     if len(answerable_with_evidence):
-        hits = [
-            hit_at_k(r["retrieved_doc_ids"], r["evidence_doc_id"], k)
-            for _, r in answerable_with_evidence.iterrows()
-        ]
         recalls = [
             recall_at_k(r["retrieved_doc_ids"], r["evidence_doc_id"], k)
             for _, r in answerable_with_evidence.iterrows()
@@ -319,20 +366,15 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
             ndcg_at_k(r["retrieved_doc_ids"], r["evidence_doc_id"], k)
             for _, r in answerable_with_evidence.iterrows()
         ]
-        hit_mean = float(np.nanmean(hits))
         recall_mean = float(np.nanmean(recalls))
         mrr_mean = float(np.nanmean(rrs))
         ndcg_mean = float(np.nanmean(ndcgs))
     else:
-        hit_mean = recall_mean = mrr_mean = ndcg_mean = float("nan")
+        recall_mean = mrr_mean = ndcg_mean = float("nan")
 
     # ---------- Answer quality (only on answerable rows) ----------
     answerable = df[df["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"]
     if len(answerable):
-        ems = [
-            exact_match(r["generated_answer"], r["gold_answer"])
-            for _, r in answerable.iterrows()
-        ]
         f1s = [
             token_f1(r["generated_answer"], r["gold_answer"])
             for _, r in answerable.iterrows()
@@ -345,18 +387,36 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
             answerable["generated_answer"].fillna("").tolist(),
             answerable["gold_answer"].fillna("").tolist(),
         )
-        em_correct = int(sum(ems))
-        em_pct = float(np.mean(ems) * 100.0)
         f1_mean = float(np.nanmean(f1s))
         rouge_mean = float(np.nanmean(rouges)) if rouges else float("nan")
         sim_mean = float(np.nanmean(sims)) if sims else float("nan")
     else:
-        em_correct = 0
-        em_pct = f1_mean = rouge_mean = sim_mean = float("nan")
+        f1_mean = rouge_mean = sim_mean = float("nan")
+
+    # Yes/No EM is computed on the yes/no slice (gold starts with yes/no).
+    yesno_mask = answerable["gold_answer"].astype(str).str.strip().str.lower().str.match(
+        r"^(yes|no)\b"
+    )
+    yesno_subset = answerable[yesno_mask.fillna(False)]
+    if len(yesno_subset):
+        yesno_scores = [
+            yesno_em(r["generated_answer"], r["gold_answer"])
+            for _, r in yesno_subset.iterrows()
+        ]
+        yesno_pct = float(np.mean(yesno_scores) * 100.0)
+    else:
+        yesno_pct = float("nan")
+
+    correct_count = correct_answers_count(df, CORRECT_F1_THRESHOLD)
 
     # ---------- Faithfulness (lexical) ----------
+    # Treat missing refused flags as False so a row whose generation didn't
+    # produce a refusal flag (e.g. a failed call left NaN) isn't silently
+    # excluded from the groundedness / hallucination aggregates.
     refused_flags = (
-        df["refused"].astype(bool).tolist() if "refused" in df.columns else None
+        df["refused"].fillna(False).astype(bool).tolist()
+        if "refused" in df.columns
+        else None
     )
     grounded_mean = aggregate_groundedness(
         df["generated_answer"].fillna("").tolist(),
@@ -383,20 +443,24 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
     noise = noise_robustness_metrics(df, k)
 
     # ---------- Efficiency ----------
-    total_ms = df["retrieval_ms"].astype(float) + df["generation_ms"].astype(float)
-    avg_latency_s = float(total_ms.mean()) / 1000.0
+    df_lat = df.assign(
+        total_ms=df["retrieval_ms"].astype(float) + df["generation_ms"].astype(float)
+    )
+    avg_latency_s = float(df_lat["total_ms"].mean()) / 1000.0
     retrieval_latency_s = float(df["retrieval_ms"].astype(float).mean()) / 1000.0
+    generation_latency_s = float(df["generation_ms"].astype(float).mean()) / 1000.0
+    lat_detail = latency_detail(df_lat)
+    retrieval_p95_s = lat_detail["retrieval_p95_ms"] / 1000.0
 
     return {
         "Total Questions": int(len(df)),
-        "Correct Answers": em_correct,
+        "Correct Answers": correct_count,
         # Retrieval
-        "Hit@K": _round_or_blank(hit_mean),
         "Recall@K": _round_or_blank(recall_mean),
         "MRR": _round_or_blank(mrr_mean),
         "nDCG@K": _round_or_blank(ndcg_mean),
         # Answer quality
-        "Exact Match Accuracy (%)": _round_or_blank(em_pct, digits=2),
+        "Yes/No EM (%)": _round_or_blank(yesno_pct, digits=2),
         "F1 Score": _round_or_blank(f1_mean),
         "ROUGE-L": _round_or_blank(rouge_mean),
         "Semantic Similarity": _round_or_blank(sim_mean),
@@ -406,6 +470,8 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
         # Efficiency
         "Avg Latency / Question (s)": _round_or_blank(avg_latency_s, digits=3),
         "Retrieval Latency (s)": _round_or_blank(retrieval_latency_s, digits=3),
+        "Generation Latency (s)": _round_or_blank(generation_latency_s, digits=3),
+        "Retrieval p95 (s)": _round_or_blank(retrieval_p95_s, digits=3),
         # Robustness
         "Answerability Accuracy": _round_or_blank(answerability_acc),
         "Long Context Accuracy": _round_or_blank(
@@ -413,19 +479,6 @@ def compute_per_cell_metrics(answers_df: pd.DataFrame, k: int) -> dict[str, Any]
         ),
         "Noise Robustness": _round_or_blank(noise["noise_robust_f1"]),
     }
-
-
-def _write_metric_snapshot(pipeline: str, k: int, metrics: dict[str, Any]) -> None:
-    """Write a one-row CSV with every captured metric for this (pipeline, k) cell."""
-    snapshot = {
-        "Pipeline": PIPELINE_LABEL[pipeline],
-        "pipeline_key": pipeline,
-        "K Value": int(k),
-        **metrics,
-    }
-    out = pipeline_output_dir(pipeline) / f"metrics_k{k}.csv"
-    pd.DataFrame([snapshot]).to_csv(out, index=False)
-    logger.info("Wrote %s", out)
 
 
 def _upsert_pipeline_summary(pipeline: str, k: int, metrics: dict[str, Any]) -> None:
@@ -546,6 +599,13 @@ def _write_per_question_jsonl(
             if gold_answer not in (None, "", "[UNANSWERABLE]")
             else 0.0
         )
+        gold_first = str(gold_answer or "").strip().lower().split()[:1]
+        is_yesno_gold = bool(gold_first and gold_first[0] in {"yes", "no"})
+        yn_em = (
+            yesno_em(generated_answer, gold_answer)
+            if is_yesno_gold and gold_answer != "[UNANSWERABLE]"
+            else None
+        )
         is_ans_raw = r.get("is_answerable")
         if isinstance(is_ans_raw, (int, np.integer, float, np.floating)):
             is_answerable = bool(int(is_ans_raw)) if not pd.isna(is_ans_raw) else False
@@ -576,6 +636,8 @@ def _write_per_question_jsonl(
             "refused": refused,
             "em": int(em),
             "token_f1": float(f1),
+            "yesno_em": yn_em,
+            "is_yesno_gold": is_yesno_gold,
             "retrieval_ms": retrieval_ms,
             "generation_ms": generation_ms,
             "total_ms": retrieval_ms + generation_ms,
@@ -612,7 +674,6 @@ def run_pipeline_cell(
     _write_per_question_jsonl(answers_df, pipeline, k, seed=seed, output_dir=output_dir)
 
     metrics = compute_per_cell_metrics(answers_df, k)
-    _write_metric_snapshot(pipeline, k, metrics)
     _upsert_pipeline_summary(pipeline, k, metrics)
     upsert_results_row(pipeline, k, metrics)
     logger.info(

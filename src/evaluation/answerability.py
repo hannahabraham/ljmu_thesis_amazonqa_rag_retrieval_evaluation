@@ -10,6 +10,7 @@ import pandas as pd
 
 
 def classify_answerability(is_answerable: int, refused: bool) -> str:
+    """Return the answerability bucket for one (gold-label, refusal) pair."""
     if is_answerable == 1 and not refused:
         return "correctly_answered"
     if is_answerable == 1 and refused:

@@ -1,7 +1,9 @@
 """Single-key Groq client for batch prompt generation.
 
-The class keeps its historical name so existing pipeline imports keep working,
-but prompts are now processed sequentially with one active key.
+Prompts are processed sequentially with one active API key. When a quota or
+auth error is raised, the user is prompted (via ``getpass``) for a
+replacement key. Multi-key rotation was removed -- the thesis pipeline is
+re-runnable with a fresh key whenever the current one is exhausted.
 """
 
 from __future__ import annotations
@@ -27,22 +29,28 @@ class BatchResult:
     error: str | None = None
 
 
-class ParallelGroqClient:
+class GroqClient:
     """Generate with one Groq key at a time, asking for a replacement on quota."""
 
     def __init__(
         self,
-        api_keys: Sequence[str],
+        api_keys: Sequence[str] | str,
         model: str,
         temperature: float = 0.0,
         max_tokens: int = 200,
-        rpm_per_key: int = 30,
-        tpm_per_key: int = 12_000,
         max_retries: int = 2,
         request_timeout: int = 60,
     ) -> None:
-        """Initialize the active Groq client."""
-        api_key = str(next(iter(api_keys), "")).strip()
+        """Initialize the active Groq client.
+
+        ``api_keys`` accepts either a single string or a sequence (only the
+        first non-empty entry is used). The sequence form is preserved for
+        backwards compatibility with call sites that still pass a list.
+        """
+        if isinstance(api_keys, str):
+            api_key = api_keys.strip()
+        else:
+            api_key = str(next(iter(api_keys), "")).strip()
         if not api_key:
             raise ValueError("Groq api key must be non-empty")
 
@@ -53,11 +61,6 @@ class ParallelGroqClient:
         self._max_retries = max_retries
         self._api_key = api_key
         self._client = self._build_client(api_key)
-
-        # These parameters are kept for backwards compatibility with existing
-        # callers. Sequential execution is intentionally conservative.
-        self._rpm_per_key = rpm_per_key
-        self._tpm_per_key = tpm_per_key
 
     def _build_client(self, api_key: str) -> Any:
         from langchain_groq import ChatGroq
@@ -181,3 +184,8 @@ class ParallelGroqClient:
             )
 
         return results
+
+
+# Backwards-compatible alias for the legacy import path.
+ParallelGroqClient = GroqClient
+

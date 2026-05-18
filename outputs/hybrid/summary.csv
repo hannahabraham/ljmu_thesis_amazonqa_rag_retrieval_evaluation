@@ -1,5 +1,5 @@
-Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Hit@K,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Exact Match Accuracy (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
-Hybrid Retrieval,hybrid,1,200,0,0.2059,0.2059,0.2059,0.2059,,,0.0,0.1181,0.1154,0.3274,,0.5539,0.4461,0.314,0.019,0.535,0.5125,0.1056
-Hybrid Retrieval,hybrid,3,200,0,0.4338,0.4338,0.3039,0.3372,,,0.0,0.1235,0.1167,0.3406,,0.501,0.499,0.345,0.016,0.59,0.55,0.1076
-Hybrid Retrieval,hybrid,5,200,0,0.5662,0.5662,0.3333,0.391,,,0.0,0.1263,0.1206,0.3553,,0.4144,0.5856,0.312,0.015,0.625,0.6125,0.1123
-Hybrid Retrieval,hybrid,10,200,0,0.8824,0.8824,0.373,0.4906,,,0.0,0.1307,0.1213,0.3665,,0.3717,0.6283,0.758,0.02,0.625,0.575,0.1362
+Pipeline,pipeline_key,K Value,Total Questions,Correct Answers,Recall@K,MRR,nDCG@K,Context Precision,Context Recall,Yes/No EM (%),F1 Score,ROUGE-L,Semantic Similarity,Faithfulness Score,Hallucination Rate,Groundedness,Avg Latency / Question (s),Retrieval Latency (s),Generation Latency (s),Retrieval p95 (s),Answerability Accuracy,Long Context Accuracy,Noise Robustness
+Hybrid Retrieval,hybrid,1,200,60,0.2143,0.2143,0.2143,,,10.34,0.1242,0.1127,0.3083,,0.5916,0.4084,0.331,0.019,0.312,0.036,0.66,0.6277,0.1196
+Hybrid Retrieval,hybrid,3,200,63,0.5159,0.3466,0.39,,,20.69,0.1327,0.1184,0.3499,,0.4747,0.5253,0.33,0.019,0.311,0.035,0.71,0.7021,0.1253
+Hybrid Retrieval,hybrid,5,200,64,0.6984,0.3874,0.4645,,,20.69,0.1362,0.1207,0.3523,,0.4488,0.5512,0.355,0.019,0.335,0.036,0.72,0.7128,0.143
+Hybrid Retrieval,hybrid,10,200,64,0.8413,0.4076,0.5117,,,20.69,0.1379,0.1245,0.3581,,0.3747,0.6253,0.375,0.019,0.357,0.033,0.725,0.734,0.1404

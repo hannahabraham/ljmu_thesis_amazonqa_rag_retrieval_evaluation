@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -97,3 +99,18 @@ class BM25Retriever(Retriever):
             )
 
         return results
+
+    def save(self, path: Path) -> None:
+        """Persist this retriever to ``path`` (pickle)."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as handle:
+            pickle.dump(self, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, path: Path) -> "BM25Retriever":
+        """Load a previously pickled retriever from ``path``."""
+        with open(path, "rb") as handle:
+            obj = pickle.load(handle)
+        if not isinstance(obj, cls):
+            raise TypeError(f"{path} did not contain a {cls.__name__}")
+        return obj

@@ -108,7 +108,13 @@ def build_passage_chunks(kb_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_sentence_chunks(kb_df: pd.DataFrame) -> pd.DataFrame:
-    """Build sentence chunks with previous and next sentence identifiers."""
+    """Build sentence chunks with previous and next sentence identifiers.
+
+    Edge sentences (the first / last in a review) carry ``None`` for the
+    missing neighbour. Once collected into a DataFrame, pandas coerces those
+    to ``NaN`` for object/string columns, so consumers must use
+    ``pd.isna(...)`` rather than identity checks.
+    """
     _ensure_nltk()
 
     from nltk.tokenize import sent_tokenize  # pylint: disable=import-outside-toplevel

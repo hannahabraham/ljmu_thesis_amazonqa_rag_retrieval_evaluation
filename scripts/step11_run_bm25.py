@@ -7,6 +7,7 @@ Examples:
     python -m scripts.step11_run_bm25 --ks 5
     python -m scripts.step11_run_bm25 --ks 1 3 5 10
     python -m scripts.step11_run_bm25 --ks 5 --sample 50
+
 """
 
 from __future__ import annotations

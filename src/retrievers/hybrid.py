@@ -33,6 +33,10 @@ def reciprocal_rank_fusion(
     )
 
 
+# Short alias kept for callers that imported the historical name.
+rrf = reciprocal_rank_fusion
+
+
 class HybridRetriever(Retriever):
     """Hybrid retriever that fuses BM25 and dense results."""
 

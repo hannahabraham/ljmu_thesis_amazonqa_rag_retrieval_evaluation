@@ -95,19 +95,22 @@ def test_parse_judge_response_strips_fences() -> None:
 
 
 def test_validate_golden_passes(fake_kb: pd.DataFrame) -> None:
-    """Test valid golden rows pass consistency validation."""
+    """Test valid golden rows pass consistency validation and are marked ok."""
     golden = pd.DataFrame(
         [
             {
                 "golden_id": "G_001",
                 "golden_answer": "Yes, waterproof",
+                "answerability": 1,
                 "evidence_doc_id": "KB_00001",
                 "evidence_text": "Product 1 is fully waterproof to 10m.",
             },
         ]
     )
 
-    validate_golden_consistency(golden, fake_kb)
+    annotated = validate_golden_consistency(golden, fake_kb)
+
+    assert list(annotated["validation_status"]) == ["ok"]
 
 
 def test_validate_golden_fails_missing_doc(fake_kb: pd.DataFrame) -> None:
@@ -117,6 +120,7 @@ def test_validate_golden_fails_missing_doc(fake_kb: pd.DataFrame) -> None:
             {
                 "golden_id": "G_001",
                 "golden_answer": "Yes",
+                "answerability": 1,
                 "evidence_doc_id": "KB_99999",
                 "evidence_text": "anything",
             },
@@ -134,6 +138,7 @@ def test_validate_golden_fails_drift(fake_kb: pd.DataFrame) -> None:
             {
                 "golden_id": "G_001",
                 "golden_answer": "Yes",
+                "answerability": 1,
                 "evidence_doc_id": "KB_00001",
                 "evidence_text": "DIFFERENT TEXT",
             },
@@ -144,20 +149,43 @@ def test_validate_golden_fails_drift(fake_kb: pd.DataFrame) -> None:
         validate_golden_consistency(golden, fake_kb)
 
 
-def test_validate_golden_fails_unanswerable_with_evidence(
+def test_validate_golden_flags_unanswerable_with_evidence(
     fake_kb: pd.DataFrame,
 ) -> None:
-    """Test unanswerable golden rows cannot contain evidence document IDs."""
+    """Unanswerable rows carrying evidence are flagged, not raised."""
     golden = pd.DataFrame(
         [
             {
                 "golden_id": "G_001",
                 "golden_answer": "[UNANSWERABLE]",
+                "answerability": 0,
                 "evidence_doc_id": "KB_00001",
                 "evidence_text": "irrelevant",
             },
         ]
     )
 
-    with pytest.raises(ValueError, match="non-null evidence_doc_id"):
-        validate_golden_consistency(golden, fake_kb)
+    annotated = validate_golden_consistency(golden, fake_kb)
+
+    assert list(annotated["validation_status"]) == ["unanswerable_with_evidence"]
+
+
+def test_validate_golden_flags_answerability_label_mismatch(
+    fake_kb: pd.DataFrame,
+) -> None:
+    """Answerability/label disagreements are flagged as soft warnings."""
+    golden = pd.DataFrame(
+        [
+            {
+                "golden_id": "G_001",
+                "golden_answer": "[UNANSWERABLE]",
+                "answerability": 1,
+                "evidence_doc_id": None,
+                "evidence_text": None,
+            },
+        ]
+    )
+
+    annotated = validate_golden_consistency(golden, fake_kb)
+
+    assert list(annotated["validation_status"]) == ["label_mismatch"]

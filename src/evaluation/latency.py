@@ -9,15 +9,26 @@ from __future__ import annotations
 import pandas as pd
 
 
+def _numeric_column(per_q: pd.DataFrame, column: str) -> pd.Series:
+    """Return a coerced-numeric Series for ``column``, or an empty float Series if absent."""
+    if column not in per_q.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(per_q[column], errors="coerce")
+
+
 def avg_latency_per_question_ms(per_q: pd.DataFrame) -> float:
     """Mean total latency per question (retrieval + generation)."""
-    if per_q.empty or "total_ms" not in per_q.columns:
-        if "retrieval_ms" in per_q.columns and "generation_ms" in per_q.columns:
-            total = pd.to_numeric(per_q["retrieval_ms"], errors="coerce").fillna(0.0) + \
-                pd.to_numeric(per_q["generation_ms"], errors="coerce").fillna(0.0)
-            return float(total.mean()) if len(total) else float("nan")
+    if per_q.empty:
         return float("nan")
-    return float(pd.to_numeric(per_q["total_ms"], errors="coerce").mean())
+    if "total_ms" in per_q.columns:
+        return float(_numeric_column(per_q, "total_ms").mean())
+    if "retrieval_ms" in per_q.columns and "generation_ms" in per_q.columns:
+        total = (
+            _numeric_column(per_q, "retrieval_ms").fillna(0.0)
+            + _numeric_column(per_q, "generation_ms").fillna(0.0)
+        )
+        return float(total.mean()) if len(total) else float("nan")
+    return float("nan")
 
 
 def latency_detail(per_q: pd.DataFrame) -> dict[str, float]:
@@ -31,9 +42,9 @@ def latency_detail(per_q: pd.DataFrame) -> dict[str, float]:
             "total_p50_ms": float("nan"),
             "total_p95_ms": float("nan"),
         }
-    retrieval = pd.to_numeric(per_q.get("retrieval_ms"), errors="coerce").dropna()
-    generation = pd.to_numeric(per_q.get("generation_ms"), errors="coerce").dropna()
-    total = pd.to_numeric(per_q.get("total_ms"), errors="coerce").dropna()
+    retrieval = _numeric_column(per_q, "retrieval_ms").dropna()
+    generation = _numeric_column(per_q, "generation_ms").dropna()
+    total = _numeric_column(per_q, "total_ms").dropna()
     if total.empty and not retrieval.empty and not generation.empty:
         total = retrieval.reset_index(drop=True) + generation.reset_index(drop=True)
 

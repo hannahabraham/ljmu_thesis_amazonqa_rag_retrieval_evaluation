@@ -5,6 +5,7 @@ Writes per-question outputs using run IDs such as ``pc_k5_seed42``.
 Examples:
     python -m scripts.step15_run_parent_child --ks 5
     python -m scripts.step15_run_parent_child --ks 1 3 5 10 --seed 42
+
 """
 
 from __future__ import annotations

@@ -48,6 +48,7 @@ def pipeline_output_dir(pipeline_key: str) -> Path:
 
     Raises:
         ValueError: If the pipeline key is unknown.
+
     """
     if pipeline_key not in PIPELINE_KEYS:
         raise ValueError(f"unknown pipeline key {pipeline_key!r}")
@@ -107,6 +108,8 @@ QDRANT_COLLECTIONS = {
     "child_chunks": "child_chunks",
 }
 
+BM25_PICKLE_PATH = INDEX_DIR / "bm25.pkl"
+
 # Cache
 LLM_CACHE_DIR = Path(os.getenv("LLM_CACHE_DIR", ".cache/llm"))
 LLM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -122,6 +125,31 @@ assert TRAIN_SAMPLE + VAL_SAMPLE + TEST_SAMPLE == SAMPLE_SIZE, (
     f"({TRAIN_SAMPLE} + {VAL_SAMPLE} + {TEST_SAMPLE}) "
     f"!= SAMPLE_SIZE ({SAMPLE_SIZE})"
 )
+
+# Quota table for quota_stratified_sample (used by step05).
+#
+# Designed to give the answerability and yes/no analyses enough power
+# without leaving descriptive thin. Totals:
+#   yes/no       = 55  (35 answerable + 20 unanswerable)
+#   descriptive  = 145 (90 answerable + 55 unanswerable)
+#   answerable   = 125, unanswerable = 75
+#   train/val/test = 120/40/40
+SAMPLE_QUOTAS: dict[tuple[str, int], dict[str, int]] = {
+    ("yesno", 1):       {"train": 21, "val":  7, "test":  7},
+    ("yesno", 0):       {"train": 12, "val":  4, "test":  4},
+    ("descriptive", 1): {"train": 54, "val": 18, "test": 18},
+    ("descriptive", 0): {"train": 33, "val": 11, "test": 11},
+}
+
+_quota_total = sum(
+    count
+    for split_counts in SAMPLE_QUOTAS.values()
+    for count in split_counts.values()
+)
+assert _quota_total == SAMPLE_SIZE, (
+    f"SAMPLE_QUOTAS sums to {_quota_total}, expected SAMPLE_SIZE={SAMPLE_SIZE}"
+)
+del _quota_total
 
 WILSON_VOTE_THRESHOLD = 5
 

@@ -342,7 +342,7 @@ def _run_ragas_batch_with_backoff(
                 else pd.DataFrame(result)
             )
 
-        except BaseException as error:
+        except Exception as error:  # noqa: BLE001 -- RAGAS bubbles up varied SDK errors
             if attempt >= max_retries or not should_try_next_key(error):
                 raise
 
@@ -395,35 +395,6 @@ def _aggregate_scores(
             row[column_name] = float("nan")
 
     return row
-
-
-def _upsert_pipeline_metrics(
-    pipeline: str,
-    row: dict,
-) -> None:
-    """Write or update per-pipeline RAGAS metrics."""
-    output_path = pipeline_output_dir(pipeline) / "ragas_metrics.csv"
-
-    if output_path.exists():
-        existing = pd.read_csv(output_path)
-    else:
-        existing = pd.DataFrame()
-
-    if not existing.empty:
-        existing = existing[
-            ~((existing["pipeline"] == row["pipeline"]) & (existing["k"] == row["k"]))
-        ]
-
-    merged = (
-        pd.concat(
-            [existing, pd.DataFrame([row])],
-            ignore_index=True,
-        )
-        .sort_values("k")
-        .reset_index(drop=True)
-    )
-
-    merged.to_csv(output_path, index=False)
 
 
 def _evaluate(
@@ -548,11 +519,6 @@ def _evaluate(
         k_value,
         seed,
         scores,
-    )
-
-    _upsert_pipeline_metrics(
-        pipeline,
-        aggregate_row,
     )
 
     return aggregate_row

@@ -11,6 +11,7 @@ preserving train/validation/test proportions and stratum balance.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from config.settings import (
     NAMED_CATEGORIES,
     QUESTION_LENGTH_BUCKETS,
     RANDOM_SEED,
+    SAMPLE_QUOTAS,
     SAMPLE_SIZE,
     TEST_SAMPLE,
     TRAIN_SAMPLE,
@@ -355,21 +357,22 @@ def two_stage_stratified_sample(
     # ------------------------------------------------------------------
     # Stage 2: Fill remaining slots from the wider dataset.
     # ------------------------------------------------------------------
-    remaining = combined_df.drop(
-        index=stage1.index,
-        errors="ignore",
-    )
-
-    used_qids = (
+    # Filter by qid, not by positional index. stage1 has a fresh RangeIndex
+    # after concat(ignore_index=True), so dropping by stage1.index against
+    # combined_df would remove rows by coincident integer position rather
+    # than the actual stage-1 selections.
+    used_qids: set[str] = (
         set(stage1["qid"].tolist())
         if "qid" in stage1.columns
         else set()
     )
 
     if used_qids:
-        remaining = remaining[
-            ~remaining["qid"].isin(used_qids)
-        ]
+        remaining = combined_df[
+            ~combined_df["qid"].isin(used_qids)
+        ].copy()
+    else:
+        remaining = combined_df.copy()
 
     stage2_target = sample_size - len(stage1)
 
@@ -442,3 +445,385 @@ def stratified_sample_by_source(
         combined_df,
         seed=seed,
     )
+
+
+# ----------------------------------------------------------------------
+# Quota-driven sampler (used by step05).
+# ----------------------------------------------------------------------
+
+_FALLBACK_SPLIT_ORDER: dict[str, tuple[str, ...]] = {
+    "train": ("val", "test"),
+    "val": ("train", "test"),
+    "test": ("val", "train"),
+}
+
+
+def _matches_split(series: pd.Series, split_name: str) -> pd.Series:
+    """Return a boolean mask selecting rows belonging to a split."""
+    return series.str.contains(split_name, case=False, na=False)
+
+
+def _draw_rows(
+    pool: pd.DataFrame,
+    needed: int,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Sample up to ``needed`` rows from ``pool`` without replacement."""
+    if needed <= 0 or pool.empty:
+        return pool.iloc[0:0].copy()
+
+    take = min(needed, len(pool))
+    return pool.sample(
+        n=take,
+        random_state=int(rng.integers(0, 10**9)),
+    )
+
+
+def _do_one_swap(
+    sampled: pd.DataFrame,
+    selected_keys: set[tuple[str, str]],
+    swap_out_candidates: pd.DataFrame,
+    combined_df: pd.DataFrame,
+    swap_in_predicate,
+    rng: np.random.Generator,
+) -> tuple[pd.DataFrame, bool]:
+    """Perform one within-cell swap. Returns (sampled, swapped_flag).
+
+    ``swap_in_predicate(swap_out_row) -> pd.DataFrame`` returns the pool of
+    population rows eligible to swap into the cell vacated by
+    ``swap_out_row``.
+    """
+    shuffled = swap_out_candidates.sample(
+        frac=1.0,
+        random_state=int(rng.integers(0, 10**9)),
+    )
+
+    for swap_out_idx, swap_out in shuffled.iterrows():
+        cell_pool = swap_in_predicate(swap_out)
+        if cell_pool.empty:
+            continue
+
+        pool_keys = pd.Series(
+            list(
+                zip(
+                    cell_pool["qid"].astype(str),
+                    cell_pool["source_file"].astype(str),
+                )
+            ),
+            index=cell_pool.index,
+        )
+        cell_pool = cell_pool[~pool_keys.isin(selected_keys)]
+        if cell_pool.empty:
+            continue
+
+        swap_in = cell_pool.sample(
+            n=1,
+            random_state=int(rng.integers(0, 10**9)),
+        ).iloc[0]
+
+        sampled = sampled.drop(swap_out_idx).reset_index(drop=True)
+        selected_keys.discard(
+            (str(swap_out["qid"]), str(swap_out["source_file"]))
+        )
+        sampled = pd.concat(
+            [sampled, swap_in.to_frame().T],
+            ignore_index=True,
+        )
+        selected_keys.add(
+            (str(swap_in["qid"]), str(swap_in["source_file"]))
+        )
+        return sampled, True
+
+    return sampled, False
+
+
+def _rebalance_named_categories(
+    sampled: pd.DataFrame,
+    combined_df: pd.DataFrame,
+    named_categories: Sequence[str],
+    target: int,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Rebalance the sample so every named category has exactly ``target`` rows.
+
+    Swaps stay inside the same ``(questionType, is_answerable, source_file)``
+    cell, so cell-level quotas are unchanged — only which category appears
+    within each cell changes.
+
+    Pass 1 swaps over-represented named categories down to ``target`` (e.g.
+    Electronics 52→30, donating slots to 'other').
+
+    Pass 2 swaps under-represented named categories up from 'other' to
+    ``target`` (e.g. Health 8→30, consuming 'other' slots).
+    """
+    sampled = sampled.reset_index(drop=True).copy()
+    named_set = set(named_categories)
+
+    selected_keys: set[tuple[str, str]] = set(
+        zip(sampled["qid"].astype(str), sampled["source_file"].astype(str))
+    )
+
+    def _same_cell(swap_out: pd.Series) -> pd.Series:
+        return (
+            (combined_df["questionType"].astype(str) == str(swap_out["questionType"]))
+            & (combined_df["is_answerable"] == swap_out["is_answerable"])
+            & (combined_df["source_file"] == swap_out["source_file"])
+        )
+
+    # --- Pass 1: swap over-represented named categories DOWN ---
+    for category in named_categories:
+        while True:
+            current = int((sampled["category"] == category).sum())
+            excess = current - target
+            if excess <= 0:
+                break
+
+            swap_out_pool = sampled[sampled["category"] == category]
+
+            def predicate(swap_out: pd.Series) -> pd.DataFrame:
+                return combined_df[
+                    _same_cell(swap_out)
+                    & (~combined_df["category"].isin(named_set))
+                ]
+
+            sampled, swapped = _do_one_swap(
+                sampled,
+                selected_keys,
+                swap_out_pool,
+                combined_df,
+                predicate,
+                rng,
+            )
+            if not swapped:
+                LOGGER.warning(
+                    "Named-category %-30s n=%d (target=%d, %d above — "
+                    "no compatible swap-down available)",
+                    category, current, target, excess,
+                )
+                break
+
+    # --- Pass 2: swap under-represented named categories UP from 'other' ---
+    for category in named_categories:
+        while True:
+            current = int((sampled["category"] == category).sum())
+            deficit = target - current
+            if deficit <= 0:
+                LOGGER.info(
+                    "Named-category %-30s n=%d (target=%d, OK)",
+                    category, current, target,
+                )
+                break
+
+            swap_out_pool = sampled[~sampled["category"].isin(named_set)]
+            if swap_out_pool.empty:
+                LOGGER.warning(
+                    "Cannot top up %s: no 'other' rows left to swap out "
+                    "(n=%d, %d below target)",
+                    category, current, deficit,
+                )
+                break
+
+            def predicate(swap_out: pd.Series, _cat: str = category) -> pd.DataFrame:
+                return combined_df[
+                    _same_cell(swap_out)
+                    & (combined_df["category"] == _cat)
+                ]
+
+            sampled, swapped = _do_one_swap(
+                sampled,
+                selected_keys,
+                swap_out_pool,
+                combined_df,
+                predicate,
+                rng,
+            )
+            if not swapped:
+                LOGGER.warning(
+                    "Named-category %-30s n=%d (target=%d, %d below — "
+                    "no compatible swap-up available)",
+                    category, current, target, deficit,
+                )
+                break
+
+    return sampled.reset_index(drop=True)
+
+
+def quota_stratified_sample(
+    combined_df: pd.DataFrame,
+    quotas: dict[tuple[str, int], dict[str, int]] | None = None,
+    seed: int = RANDOM_SEED,
+    named_category_floor: int = MIN_PER_NAMED_CATEGORY,
+    named_categories: Sequence[str] = NAMED_CATEGORIES,
+) -> pd.DataFrame:
+    """Sample rows to match an explicit ``(questionType, is_answerable, split)`` quota.
+
+    The proportional sampler under-represents yes/no questions because they
+    are only ~15% of the AmazonQA population. This sampler instead draws a
+    pre-declared number of rows per cell, so the final 200-row evaluation
+    set has enough yes/no and unanswerable examples to power those
+    sub-analyses.
+
+    If a cell underfills (population too small), the deficit is redirected
+    to other splits within the **same questionType + answerability**, so
+    yes/no never gets backfilled with descriptive rows and answerable
+    never gets backfilled with unanswerable rows.
+
+    After the cell-level draw, ``_top_up_named_categories`` swaps 'other'
+    rows for named-category rows within the same cell so each named
+    category meets ``named_category_floor``. The cell-level quota is
+    preserved exactly; only which category appears within the cell changes.
+    """
+    if combined_df.empty:
+        raise ValueError("combined_df is empty")
+
+    if "qid" not in combined_df.columns:
+        raise ValueError("combined_df must contain a 'qid' column")
+
+    quotas = SAMPLE_QUOTAS if quotas is None else quotas
+
+    rng = np.random.default_rng(seed)
+    selected_pieces: list[pd.DataFrame] = []
+    # (question_type, answerability, split, original_target, adjusted_target, actual_drawn)
+    fill_report: list[tuple[str, int, str, int, int, int]] = []
+
+    for (question_type, answerability), split_targets in quotas.items():
+        type_mask = combined_df["questionType"].astype(str) == question_type
+        ans_mask = combined_df["is_answerable"] == answerability
+        cell_df = combined_df[type_mask & ans_mask]
+
+        per_split_pools: dict[str, pd.DataFrame] = {
+            split_name: cell_df[_matches_split(cell_df["source_file"], split_name)]
+            for split_name in split_targets
+        }
+
+        carry_over: dict[str, int] = dict.fromkeys(split_targets, 0)
+
+        for split_name, target in split_targets.items():
+            pool = per_split_pools[split_name]
+            available = len(pool)
+
+            if available >= target:
+                continue
+
+            shortfall = target - available
+            for fallback_split in _FALLBACK_SPLIT_ORDER.get(
+                split_name, ()
+            ):
+                if fallback_split not in split_targets:
+                    continue
+                carry_over[fallback_split] += shortfall
+                LOGGER.warning(
+                    "Cell (%s, ans=%d, split=%s) short by %d rows; "
+                    "redirecting demand to split=%s",
+                    question_type,
+                    answerability,
+                    split_name,
+                    shortfall,
+                    fallback_split,
+                )
+                break
+            else:
+                LOGGER.warning(
+                    "Cell (%s, ans=%d, split=%s) short by %d rows and "
+                    "no fallback split available; final sample will "
+                    "underfill this cell.",
+                    question_type,
+                    answerability,
+                    split_name,
+                    shortfall,
+                )
+
+        for split_name, target in split_targets.items():
+            pool = per_split_pools[split_name]
+            adjusted_target = min(
+                target + carry_over[split_name],
+                len(pool),
+            )
+
+            drawn = _draw_rows(pool, adjusted_target, rng)
+            selected_pieces.append(drawn)
+
+            fill_report.append(
+                (
+                    question_type,
+                    answerability,
+                    split_name,
+                    target,
+                    adjusted_target,
+                    len(drawn),
+                )
+            )
+
+    if not selected_pieces or all(piece.empty for piece in selected_pieces):
+        raise RuntimeError("quota_stratified_sample drew zero rows")
+
+    # Look back by the composite (qid, source_file) key — qid alone is not
+    # unique across train/val/test in AmazonQA, so isin-on-qid would silently
+    # rebind val/test selections to their train twin.
+    sampled = pd.concat(selected_pieces, ignore_index=True)
+    sampled = sampled.drop_duplicates(subset=["qid", "source_file"])
+
+    if named_category_floor > 0 and named_categories:
+        LOGGER.info(
+            "Rebalancing named categories to target=%d each:",
+            named_category_floor,
+        )
+        sampled = _rebalance_named_categories(
+            sampled,
+            combined_df,
+            named_categories,
+            named_category_floor,
+            rng,
+        )
+
+    sort_key = pd.Categorical(
+        sampled["source_file"].astype(str).str.lower(),
+        categories=["train", "val", "test"],
+        ordered=True,
+    )
+    sampled = (
+        sampled.assign(_split_order=sort_key)
+        .sort_values(["_split_order", "questionType", "is_answerable", "qid"])
+        .drop(columns="_split_order")
+        .reset_index(drop=True)
+    )
+
+    sampled["record_id"] = [
+        f"REC_{idx + 1:03d}" for idx in range(len(sampled))
+    ]
+    sampled["q_bucket"] = sampled["questionText"].apply(assign_q_bucket)
+
+    for (
+        question_type,
+        ans_flag,
+        split_name,
+        target,
+        adjusted_target,
+        actual,
+    ) in fill_report:
+        if actual == adjusted_target == target:
+            marker = "OK"
+        elif adjusted_target > target and actual == adjusted_target:
+            marker = "OVERFILL (absorbed redirect)"
+        elif actual < adjusted_target:
+            marker = "UNDERFILL"
+        else:
+            marker = "UNDER vs original (donated to sibling)"
+        LOGGER.info(
+            "  quota %-12s ans=%d split=%-5s target=%2d adjusted=%2d actual=%2d  [%s]",
+            question_type,
+            ans_flag,
+            split_name,
+            target,
+            adjusted_target,
+            actual,
+            marker,
+        )
+
+    LOGGER.info(
+        "Quota sampler produced %d rows (target %d)",
+        len(sampled),
+        sum(s for cell in quotas.values() for s in cell.values()),
+    )
+
+    return sampled

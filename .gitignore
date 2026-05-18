@@ -34,3 +34,7 @@ outputs/eda_plots/*
 !outputs/eda_plots/.gitkeep
 outputs/refusal_validation_set.csv
 
+# Stale checkpoints and ad-hoc backups
+*.bak.*
+*.partial.csv
+
