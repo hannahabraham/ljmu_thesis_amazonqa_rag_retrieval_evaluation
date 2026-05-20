@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import time
 from itertools import product
 from typing import Any
@@ -35,7 +36,7 @@ from config.settings import (
     pipeline_output_dir,
 )
 from src.evaluation.ragas_metrics import run_ragas
-from src.llm_clients.error_terms import should_try_next_key
+from src.llm_clients.error_terms import is_daily_quota_error, should_try_next_key
 from src.utils.caching import get_cached, set_cached
 from src.utils.io import (
     parse_list_field,
@@ -54,6 +55,10 @@ RAGAS_COLUMNS = (
 )
 
 RAGAS_CACHE_NAMESPACE = "ragas_row_v1"
+
+
+class DailyQuotaReached(RuntimeError):
+    """Raised when the Gemini project appears to have hit daily quota."""
 
 
 def _load_per_question(
@@ -139,6 +144,8 @@ def _write_back_per_row_scores(
 
             row[column_name] = float(value) if pd.notna(value) else None
 
+        row["ragas_attempted"] = True
+
     write_jsonl(rows, jsonl_path)
 
     LOGGER.info(
@@ -187,6 +194,8 @@ def _write_back_indexed_scores(
             rows[row_index][column_name] = (
                 float(value) if pd.notna(value) else None
             )
+
+        rows[row_index]["ragas_attempted"] = True
 
     write_jsonl(rows, jsonl_path)
 
@@ -251,6 +260,11 @@ def _cache_parts(row: pd.Series) -> tuple[str, ...]:
 
 def _score_is_complete(row: pd.Series) -> bool:
     """Return True when all row-level RAGAS scores are present."""
+    attempted = row.get("ragas_attempted", False)
+
+    if attempted is True or str(attempted).lower() == "true":
+        return True
+
     return all(
         column_name in row.index
         and pd.notna(pd.to_numeric(row[column_name], errors="coerce"))
@@ -293,14 +307,15 @@ def _apply_cached_scores(
         )
 
         if isinstance(cached, dict) and all(
-            column_name in cached and cached[column_name] is not None
-            for column_name in RAGAS_COLUMNS
+            column_name in cached for column_name in RAGAS_COLUMNS
         ):
             scores = _coerce_score_dict(cached)
             cached_updates[int(row_index)] = scores
 
             for column_name, value in scores.items():
                 dataframe.at[row_index, column_name] = value
+
+            dataframe.at[row_index, "ragas_attempted"] = True
 
             continue
 
@@ -343,9 +358,18 @@ def _run_ragas_batch_with_backoff(
             )
 
         except Exception as error:  # noqa: BLE001 -- RAGAS bubbles up varied SDK errors
+            if is_daily_quota_error(error):
+                raise DailyQuotaReached(
+                    (
+                        "Gemini daily request quota appears to be exhausted. "
+                        "Checkpointed rows are preserved; rerun after the RPD reset."
+                    )
+                ) from error
+
             if attempt >= max_retries or not should_try_next_key(error):
                 raise
 
+            jittered_delay = delay * random.uniform(0.8, 1.3)
             LOGGER.warning(
                 (
                     "RAGAS batch failed with a retryable error "
@@ -353,10 +377,10 @@ def _run_ragas_batch_with_backoff(
                 ),
                 attempt + 1,
                 max_retries,
-                delay,
+                jittered_delay,
                 error,
             )
-            time.sleep(delay)
+            time.sleep(jittered_delay)
             delay = max(delay * max(1.0, backoff_multiplier), delay + 1.0)
 
     raise RuntimeError("RAGAS batch retry loop exited unexpectedly.")
@@ -484,6 +508,8 @@ def _evaluate(
 
             for column_name, value in scores.items():
                 dataframe.at[row_index, column_name] = value
+
+            dataframe.at[row_index, "ragas_attempted"] = True
 
             set_cached(
                 RAGAS_CACHE_NAMESPACE,
@@ -628,19 +654,30 @@ def main() -> None:
     )
 
     rows: list[dict] = []
+    stopped_for_daily_quota = False
 
     for pipeline, k_value in combinations:
-        result = _evaluate(
-            pipeline,
-            k_value,
-            seed=args.seed,
-            workers=args.workers,
-            batch_size=args.batch_size,
-            sleep_seconds=args.sleep_seconds,
-            max_retries=args.max_retries,
-            backoff_seconds=args.backoff_seconds,
-            backoff_multiplier=args.backoff_multiplier,
-        )
+        try:
+            result = _evaluate(
+                pipeline,
+                k_value,
+                seed=args.seed,
+                workers=args.workers,
+                batch_size=args.batch_size,
+                sleep_seconds=args.sleep_seconds,
+                max_retries=args.max_retries,
+                backoff_seconds=args.backoff_seconds,
+                backoff_multiplier=args.backoff_multiplier,
+            )
+        except DailyQuotaReached as error:
+            LOGGER.warning(
+                "Stopping RAGAS early at %s k=%d: %s",
+                pipeline,
+                k_value,
+                error,
+            )
+            stopped_for_daily_quota = True
+            break
 
         if result is not None:
             rows.append(result)
@@ -674,10 +711,20 @@ def main() -> None:
             [existing, new_rows],
             ignore_index=True,
         )
+    elif output_path.exists():
+        merged = pd.read_csv(output_path)
     else:
-        merged = new_rows
+        merged = pd.DataFrame(
+            columns=[
+                "pipeline",
+                "k",
+                "n",
+                *RAGAS_COLUMNS,
+            ]
+        )
 
-    merged = merged.sort_values(["pipeline", "k"]).reset_index(drop=True)
+    if not merged.empty:
+        merged = merged.sort_values(["pipeline", "k"]).reset_index(drop=True)
 
     merged.to_csv(output_path, index=False)
 
@@ -686,6 +733,14 @@ def main() -> None:
         output_path,
         len(merged),
     )
+
+    if stopped_for_daily_quota:
+        LOGGER.warning(
+            (
+                "Stopped cleanly after daily quota was reached. "
+                "Rerun this command after the Gemini RPD reset to continue."
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 from pydantic import Field
 
-from src.llm_clients.error_terms import should_try_next_key
+from src.llm_clients.error_terms import should_rotate_key
 from src.llm_clients.loader import prompt_for_replacement_key
 
 LOGGER = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class RotatingGeminiChat(BaseChatModel):
                 )
             except Exception as error:  # noqa: BLE001 -- langchain SDK errors vary
                 last_error = error
-                if not should_try_next_key(error):
+                if not should_rotate_key(error):
                     raise
                 self._rotate_to_next_key(error)
 
@@ -162,7 +162,7 @@ class RotatingGeminiChat(BaseChatModel):
                 )
             except Exception as error:  # noqa: BLE001 -- langchain SDK errors vary
                 last_error = error
-                if not should_try_next_key(error):
+                if not should_rotate_key(error):
                     raise
                 self._rotate_to_next_key(error)
 
