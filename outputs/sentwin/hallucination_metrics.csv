@@ -1,0 +1,5 @@
+pipeline,k,n,hallucination_rate,refusal_rate_on_answerable,indicative
+sentwin,1,200,0.2545,0.3968,False
+sentwin,3,200,0.1481,0.4127,False
+sentwin,5,200,0.1171,0.3968,False
+sentwin,10,200,0.0985,0.373,False

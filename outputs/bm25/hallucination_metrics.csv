@@ -1,0 +1,5 @@
+pipeline,k,n,hallucination_rate,refusal_rate_on_answerable,indicative
+bm25,1,200,0.2168,0.5,False
+bm25,3,200,0.1458,0.3968,False
+bm25,5,200,0.0814,0.3651,False
+bm25,10,200,0.1039,0.3492,False

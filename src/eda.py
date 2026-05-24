@@ -176,6 +176,7 @@ def make_plots(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     sns.set_style("whitegrid")
+    sns.set_palette("colorblind")
 
     if "answers" in dataframe.columns:
         votes = dataframe["answers"].apply(_total_votes)

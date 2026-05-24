@@ -40,3 +40,15 @@ dependencies = [
     "statsmodels>=0.14.6",
     "tqdm>=4.67.3",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that exercise multiple pipeline components together",
+]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

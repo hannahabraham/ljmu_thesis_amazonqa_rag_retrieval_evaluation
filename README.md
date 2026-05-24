@@ -105,7 +105,7 @@ If a `(questionType, is_answerable, split)` cell runs short, the shortfall is re
 
 ### Retrieval, generation, evaluation
 
-Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell evaluation in one call. Per-question records are written to **`outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl`** (the v5 source of truth), with per-pipeline artefacts mirrored under **`outputs/<pipeline>/`**. RAGAS scores are written back into the JSONL by step 18; the six Results Sheet tables are assembled from the JSONL by `step23_build_results_tables.py`.
+Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell evaluation in one call. Per-question records are written to **`outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl`** (the v5 source of truth), with per-pipeline artefacts mirrored under **`outputs/<pipeline>/`**. RAGAS scores are written back into the JSONL by step 18. Aggregate per-metric CSVs live directly under `outputs/` (`retrieval_metrics.csv`, `generation_metrics.csv`, `ragas_metrics.csv`, `answerability_metrics.csv`, etc.).
 
 | Step | Script | Notes |
 |---|---|---|
@@ -121,9 +121,7 @@ Each `step1X_run_<pipeline>.py` script runs retrieval + generation + per-cell ev
 | 19b. Hallucination | `step19b_eval_hallucination.py` | hallucination rate + refusal rate on answerable |
 | 20. Category analysis | `step20_category_analysis.py` | per-category F1 (4 named categories), with CIs |
 | 21. Length analysis | `step21_question_length_analysis.py` | per-`q_bucket` F1, with CIs |
-| 22. Final ranking | `step22_final_ranking.py` | composite + pairwise Wilcoxon + sensitivity sweeps |
-| 23. Build results tables | `step23_build_results_tables.py` | 6 CSVs to `outputs/tables/` aligned to the Results Sheet |
-| 24. Excel export | `step24_export_excel.py` | bundles the table CSVs into one `.xlsx` |
+| 22. Plot figures | `step22_plot_results.py` | renders Chapter 5 PNG figures under `outputs/figures/` |
 
 ---
 
@@ -252,14 +250,6 @@ outputs/
 ├── category_metrics.csv              # per-category breakdown by k
 ├── qbucket_metrics.csv               # per-question-length breakdown by k
 ├── latency_detail.csv                # split retrieval / generation timings
-├── tables/                           # 6 Results Sheet tables (built by step23)
-│   ├── table1_overall.csv
-│   ├── table2_depth.csv
-│   ├── table3_category.csv
-│   ├── table4_length.csv
-│   ├── table6_answerability.csv
-│   └── table7_final_ranking.csv
-├── thesis_results.xlsx               # bundled tables (built by step24)
 └── eda_plots/                        # 6 plots × 3 splits
 ```
 
@@ -340,7 +330,6 @@ score = 0.25·F1 + 0.20·Faithfulness + 0.15·ContextPrecision
 │   │   ├── ragas_metrics.py               # RAGAS wiring (Gemini-routed)
 │   │   ├── answerability.py
 │   │   ├── robustness.py                  # long-context + noise robustness
-│   │   ├── table_builders.py              # 6 Results Sheet tables
 │   │   └── statistics.py                  # bootstrap CI, Wilson CI
 │   └── utils/
 │       ├── logging_config.py
@@ -348,12 +337,11 @@ score = 0.25·F1 + 0.20·Faithfulness + 0.15·ContextPrecision
 │       └── io.py
 │
 ├── scripts/
-│   └── step01_download_dataset.py … step24_export_excel.py
+│   └── step01_download_dataset.py … step22_plot_results.py
 │
 ├── outputs/
 │   ├── {bm25,dense,sentwin,hybrid,pc}/    # answers + retrieval + summary (no metric duplicates)
 │   ├── per_question/                      # v5 JSONL source of truth
-│   ├── tables/                            # 6 Results Sheet CSVs
 │   └── *.csv                              # cross-pipeline aggregates + results.csv
 │
 └── tests/
@@ -464,9 +452,7 @@ python -m scripts.step19a_eval_answerability
 python -m scripts.step19b_eval_hallucination
 python -m scripts.step20_category_analysis
 python -m scripts.step21_question_length_analysis
-python -m scripts.step22_final_ranking           # composite + Wilcoxon + sensitivity
-python -m scripts.step23_build_results_tables    # 6 CSVs to outputs/tables/
-python -m scripts.step24_export_excel            # bundle into thesis_results.xlsx
+python -m scripts.step22_plot_results          # renders Chapter 5 PNG figures
 ```
 
 For quota-safe RAGAS runs, step 18 skips rows that already have RAGAS scores, restores matching rows from the on-disk cache, writes JSONL checkpoints after each batch, and retries quota/rate-limit failures with exponential backoff. Start conservatively and increase only after a cell completes without quota errors:
@@ -527,7 +513,6 @@ Key fast-running suites:
 | `pytest`, `pytest-cov`, `pytest-mock` | Testing |
 | `ruff`, `black`, `mypy` | Lint, format, type-check |
 
-Full pinning in [requirements.txt](requirements.txt).
 
 ---
 

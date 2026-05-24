@@ -1,0 +1,5 @@
+pipeline,k,n,hallucination_rate,refusal_rate_on_answerable,indicative
+hybrid,1,200,0.2138,0.4286,False
+hybrid,3,200,0.1361,0.373,False
+hybrid,5,200,0.1225,0.3651,False
+hybrid,10,200,0.0955,0.3571,False
