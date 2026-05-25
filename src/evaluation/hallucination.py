@@ -1,6 +1,6 @@
 """Hallucination + refusal-rate pair (v5).
 
-Reported as a pair in Table 6 to expose the trade-off honestly: a pipeline that
+Reported as a pair in the Hallucination/Refusal table to expose the trade-off honestly: a pipeline that
 refuses every answerable question has zero hallucination but is useless.
 
 ``hallucination_rate``: mean (1 - faithfulness) over **answerable rows where

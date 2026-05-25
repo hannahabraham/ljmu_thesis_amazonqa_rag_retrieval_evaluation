@@ -159,7 +159,7 @@ QUESTION_LENGTH_BUCKETS = (5, 12)
 # Cells with n below this threshold are flagged.
 INDICATIVE_THRESHOLD = 10
 
-# Named categories for Table 3 and two-stage stratification
+# Named categories 
 NAMED_CATEGORIES: tuple[str, ...] = (
     "Electronics",
     "Toys_and_Games",
@@ -171,7 +171,7 @@ MIN_PER_NAMED_CATEGORY = int(
     os.getenv("MIN_PER_NAMED_CATEGORY", "30")
 )
 
-# Correct-answer definition for Table 1
+# Correct-answer definition 
 CORRECT_F1_THRESHOLD = float(
     os.getenv("CORRECT_F1_THRESHOLD", "0.5")
 )

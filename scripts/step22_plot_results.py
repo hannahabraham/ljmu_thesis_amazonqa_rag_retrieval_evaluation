@@ -1,25 +1,18 @@
-"""Render the 8 figures used in Chapter 5 of the thesis.
+"""Render the thesis figures as PNG files.
 
-Each figure is the chapter-facing chart that sits beneath a caption in
-``Chapter5_Results_and_Discussion.docx``. Figures are listed in the same
-order in which they appear in the chapter and saved as numbered PNGs under
-``outputs/figures/``.
+The figures are saved in the outputs/figures/ folder and are used in the same order as they appear in the document.
 
-Output files (in document order):
-    1_retrieval_vs_k.png        -- Figure 5.3 (section 5.4)
-    2_ragas_vs_k.png            -- Figure 5.4 (section 5.4)
-    3_category_all_k.png        -- Figure 5.6 (section 5.5)
-    4_qlength_all_k.png         -- Figure 5.7 (section 5.6)
-    5_answerability_all_k.png   -- Figure 5.5 (section 5.8)
-    6_hallucination_all_k.png   -- Figure 5.6 (section 5.8)
-    7_final_balanced_radar.png  -- Figure 5.8 (section 5.9)
-    8_overall_all_k.png         -- Figure 5.1 (section 5.10)
+Output files:
 
-The colour palette is the Okabe-Ito qualitative set (Okabe & Ito, 2008),
-which remains distinguishable under deuteranopia, protanopia, tritanopia,
-and greyscale printing. Chart titles inside each PNG carry the descriptive
-name only (no "Figure 5.X:" prefix) because the chapter document already
-provides the numbered caption beneath the embedded image.
+1_retrieval_vs_k.png
+2_ragas_vs_k.png
+3_category_all_k.png
+4_qlength_all_k.png
+5_answerability_all_k.png
+6_hallucination_all_k.png
+7_overall_all_k.png
+
+The charts use the Okabe-Ito colour palette because it is clear, colour-blind friendly, and suitable for greyscale printing. Each chart title includes only the chart name, without a figure number.
 """
 
 from __future__ import annotations
@@ -150,7 +143,7 @@ def _ordered_pipeline_colors() -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# 1 — Retrieval Depth Effect on Retrieval Quality (Figure 5.3, section 5.4)
+# 1 — Retrieval Depth Effect on Retrieval Quality 
 # --------------------------------------------------------------------------
 def figure_1_retrieval_vs_k() -> None:
     retrieval = _read_csv(OUTPUT_DIR / "retrieval_metrics.csv")
@@ -189,7 +182,7 @@ def figure_1_retrieval_vs_k() -> None:
 
 
 # --------------------------------------------------------------------------
-# 2 — Faithfulness and Context Quality across k (Figure 5.4, section 5.4)
+# 2 — Faithfulness and Context Quality across k 
 # --------------------------------------------------------------------------
 def figure_2_ragas_vs_k() -> None:
     ragas = _read_csv(OUTPUT_DIR / "ragas_metrics.csv")
@@ -228,7 +221,7 @@ def figure_2_ragas_vs_k() -> None:
 
 
 # --------------------------------------------------------------------------
-# 3 — Token F1 by Product Category Across k Values (Figure 5.6, section 5.5)
+# 3 — Token F1 by Product Category Across k Values 
 # --------------------------------------------------------------------------
 def figure_3_category_all_k() -> None:
     cat = _read_csv(OUTPUT_DIR / "category_metrics.csv")
@@ -270,7 +263,7 @@ def figure_3_category_all_k() -> None:
 
 
 # --------------------------------------------------------------------------
-# 4 — Token F1 by Question Length Across k Values (Figure 5.7, section 5.6)
+# 4 — Token F1 by Question Length Across k Values
 # --------------------------------------------------------------------------
 def figure_4_qlength_all_k() -> None:
     qb = _read_csv(OUTPUT_DIR / "qbucket_metrics.csv")
@@ -313,7 +306,7 @@ def figure_4_qlength_all_k() -> None:
 
 
 # --------------------------------------------------------------------------
-# 5 — Answerability Outcomes Across k Values (Figure 5.5, section 5.8)
+# 5 — Answerability Outcomes Across k Values 
 # --------------------------------------------------------------------------
 def figure_5_answerability_all_k() -> None:
     ans = _read_csv(OUTPUT_DIR / "answerability_metrics.csv")
@@ -370,7 +363,7 @@ def figure_5_answerability_all_k() -> None:
 
 
 # --------------------------------------------------------------------------
-# 6 — Hallucination Rate Across k Values (Figure 5.6, section 5.8)
+# 6 — Hallucination Rate Across k Values 
 # --------------------------------------------------------------------------
 def figure_6_hallucination_all_k() -> None:
     hall = _read_csv(OUTPUT_DIR / "hallucination_metrics.csv")
@@ -410,75 +403,13 @@ def figure_6_hallucination_all_k() -> None:
     _save(fig, "6_hallucination_all_k")
 
 
-# --------------------------------------------------------------------------
-# 7 — Final Balanced Pipeline Comparison (Figure 5.8, section 5.9)
-#     Radar drawn at k = DEFAULT_RADAR_K (the most common operating depth)
-# --------------------------------------------------------------------------
-def figure_7_final_balanced_radar(k: int = DEFAULT_RADAR_K) -> None:
-    results = _read_csv(OUTPUT_DIR / "results.csv")
-    ragas = _read_csv(OUTPUT_DIR / "ragas_metrics.csv")
-    if results is None or ragas is None:
-        return
-    results_k = results[results["K Value"] == k].copy()
-    ragas_k = ragas[ragas["k"] == k].rename(
-        columns={
-            "pipeline": "pipeline_key",
-            "faithfulness": "Faithfulness Score",
-            "context_precision": "Context Precision",
-            "context_recall": "Context Recall",
-        }
-    )[["pipeline_key", "Faithfulness Score", "Context Precision", "Context Recall"]]
-    merged = results_k.drop(
-        columns=["Faithfulness Score", "Context Precision", "Context Recall"],
-        errors="ignore",
-    ).merge(ragas_k, on="pipeline_key", how="left")
-    merged = _pipeline_display(merged, key_col="pipeline_key")
 
-    metric_columns = [
-        ("F1 Score", "F1"),
-        ("Faithfulness Score", "Faithfulness"),
-        ("Context Precision", "Context Precision"),
-        ("Context Recall", "Context Recall"),
-        ("Answerability Accuracy", "Answerability"),
-        ("Avg Latency / Question (s)", "Speed"),
-    ]
-    plot_df = merged.set_index("pipeline_label")[[c for c, _ in metric_columns]].copy()
-    latency = plot_df["Avg Latency / Question (s)"]
-    lo, hi = float(latency.min()), float(latency.max())
-    plot_df["Avg Latency / Question (s)"] = (
-        1.0 if hi == lo else 1.0 - (latency - lo) / (hi - lo)
-    )
-
-    labels = [pretty for _, pretty in metric_columns]
-    angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
-    angles += angles[:1]
-
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={"projection": "polar"})
-    for label in PIPELINE_ORDER_LABELS:
-        if label not in plot_df.index:
-            continue
-        values = plot_df.loc[label].tolist()
-        values += values[:1]
-        ax.plot(angles, values, label=label, color=PIPELINE_COLORS[label], linewidth=2)
-        ax.fill(angles, values, color=PIPELINE_COLORS[label], alpha=0.10)
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels)
-    ax.set_ylim(0, 1)
-    ax.set_yticks([0.2, 0.4, 0.6, 0.8])
-    ax.set_title(
-        f"Final Balanced Pipeline Comparison (k = {k})\n"
-        "Higher is better on every axis (Speed = 1 − normalised latency)",
-        pad=20, fontsize=14, fontweight="bold",
-    )
-    ax.legend(loc="upper right", bbox_to_anchor=(1.30, 1.10), fontsize=9)
-    fig.tight_layout()
-    _save(fig, "7_final_balanced_radar")
 
 
 # --------------------------------------------------------------------------
-# 8 — Overall Pipeline Performance Across k Values (Figure 5.1, section 5.10)
+# 7 — Overall Pipeline Performance Across k Values 
 # --------------------------------------------------------------------------
-def figure_8_overall_all_k() -> None:
+def figure_7_overall_all_k() -> None:
     results = _read_csv(OUTPUT_DIR / "results.csv")
     ragas = _read_csv(OUTPUT_DIR / "ragas_metrics.csv")
     if results is None or ragas is None:
@@ -532,7 +463,7 @@ def figure_8_overall_all_k() -> None:
     )
     fig.suptitle("Overall Pipeline Performance Across k Values", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.04, 1, 0.96])
-    _save(fig, "8_overall_all_k")
+    _save(fig, "7_overall_all_k")
 
 
 def main() -> None:
@@ -544,8 +475,7 @@ def main() -> None:
     figure_4_qlength_all_k()
     figure_5_answerability_all_k()
     figure_6_hallucination_all_k()
-    figure_7_final_balanced_radar()
-    figure_8_overall_all_k()
+    figure_7_overall_all_k()
     LOGGER.info("figures written to %s", FIGURES_DIR)
 
 
