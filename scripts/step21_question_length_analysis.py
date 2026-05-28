@@ -1,4 +1,4 @@
-"""Compute question-length bucket F1 metrics for all k values."""
+"""Compute question-length bucket F1 and answerability metrics for all k values."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from config.settings import (
     PIPELINE_KEYS,
     RANDOM_SEED,
 )
+from src.evaluation.answerability import compute_answerability_table
 from src.evaluation.generation_metrics import token_f1
 from src.evaluation.statistics import bootstrap_ci, is_indicative
 from src.sampling import assign_q_bucket
@@ -23,8 +24,8 @@ configure_logging()
 LOGGER = logging.getLogger(__name__)
 
 
-def _load_answerable_answers(pipeline: str) -> pd.DataFrame:
-    """Load answerable answer rows for one pipeline across all k values."""
+def _load_answers(pipeline: str) -> pd.DataFrame:
+    """Load per-question rows for one pipeline across all k values."""
     dataframe = load_per_question(
         PER_QUESTION_DIR,
         pipelines=[pipeline],
@@ -34,11 +35,7 @@ def _load_answerable_answers(pipeline: str) -> pd.DataFrame:
 
     if dataframe.empty:
         LOGGER.warning("Missing per-question rows for %s", pipeline)
-        return pd.DataFrame()
-
-    return dataframe[
-        dataframe["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"
-    ].copy()
+    return dataframe.copy()
 
 
 def _ensure_question_bucket(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -53,16 +50,29 @@ def _compute_pipeline_rows(
     pipeline: str,
     dataframe: pd.DataFrame,
 ) -> list[dict]:
-    """Compute bucket-level F1 rows for one pipeline."""
+    """Compute bucket-level F1 and answerability rows for one pipeline."""
     rows: list[dict] = []
 
-    dataframe["f1"] = [
+    answerable = dataframe[
+        dataframe["gold_answer"].astype(str).str.upper() != "[UNANSWERABLE]"
+    ].copy()
+    answerable["f1"] = [
         token_f1(row["generated_answer"], row["gold_answer"])
-        for _, row in dataframe.iterrows()
+        for _, row in answerable.iterrows()
     ]
 
     for (k_value, bucket), group in dataframe.groupby(["k", "q_bucket"]):
-        f1_mean, lower_bound, upper_bound = bootstrap_ci(group["f1"].tolist())
+        answerable_group = answerable[
+            (answerable["k"] == k_value)
+            & (answerable["q_bucket"] == bucket)
+        ]
+        f1_mean, lower_bound, upper_bound = bootstrap_ci(
+            answerable_group["f1"].tolist()
+        )
+
+        answerability_table = compute_answerability_table(
+            group.assign(is_answerable=group["is_answerable"].astype(int))
+        )
 
         rows.append(
             {
@@ -73,6 +83,9 @@ def _compute_pipeline_rows(
                 "f1": f1_mean,
                 "f1_lo": lower_bound,
                 "f1_hi": upper_bound,
+                "answerability_acc": float(
+                    answerability_table["answerability_acc"].iloc[0]
+                ),
                 "indicative": is_indicative(len(group)),
             }
         )
@@ -85,7 +98,7 @@ def main() -> None:
     rows: list[dict] = []
 
     for pipeline in PIPELINE_KEYS:
-        dataframe = _load_answerable_answers(pipeline)
+        dataframe = _load_answers(pipeline)
 
         if dataframe.empty:
             continue
