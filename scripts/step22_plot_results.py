@@ -20,18 +20,20 @@ The figures follow the revised Chapter 5 plan:
 5_latency_vs_k.png
     RQ2 latency figure for retrieval mean, generation mean,
     and retrieval p95.
-6a_category_f1.png
+6_category_f1.png
     RQ3 category-level Token F1 with 95% CI.
-6b_category_answerability.png
+7_category_answerability.png
     RQ3 category-level Answerability Accuracy.
-7a_qbucket_f1.png
+8_qbucket_f1.png
     RQ4 question-length Token F1 with 95% CI.
-7b_qbucket_answerability.png
+9_qbucket_answerability.png
     RQ4 question-length Answerability Accuracy.
-8_answerability_outcomes.png
+10_answerability_outcomes.png
     Answerability outcome counts by pipeline and k (stacked).
-9_hallucination_rate.png
+11_hallucination_rate.png
     Hallucination Rate by pipeline and k (grouped bars).
+12_significance_tests.png
+    Forest plot of paired-bootstrap differences with 95% CIs (Section 3.12).
 
 The figures are saved in OUTPUT_DIR / "figures" with the
 Okabe-Ito colour-blind-friendly palette and large labels for
@@ -40,6 +42,7 @@ thesis readability.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -50,6 +53,7 @@ import pandas as pd
 import seaborn as sns
 
 from config.settings import OUTPUT_DIR
+from src.evaluation.retrieval_metrics import recall_at_k
 from src.utils.logging_config import configure_logging
 
 configure_logging()
@@ -668,7 +672,7 @@ def _load_category_metrics() -> tuple[pd.DataFrame, list[str]] | None:
     return category, category_order
 
 
-def figure_6a_category_f1() -> None:
+def figure_6_category_f1() -> None:
     """RQ3 category-level Token F1 (1x4 across k)."""
     loaded = _load_category_metrics()
     if loaded is None:
@@ -715,10 +719,10 @@ def figure_6a_category_f1() -> None:
     _legend_below(fig, handles, labels, ncol=5)
     fig.suptitle("Token F1 by Product Category and Pipeline", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.08, 1, 0.93])
-    _save(fig, "6a_category_f1")
+    _save(fig, "6_category_f1")
 
 
-def figure_6b_category_answerability() -> None:
+def figure_7_category_answerability() -> None:
     """RQ3 category-level Answerability Accuracy (1x4 across k)."""
     loaded = _load_category_metrics()
     if loaded is None:
@@ -753,7 +757,7 @@ def figure_6b_category_answerability() -> None:
     _legend_below(fig, handles, labels, ncol=5)
     fig.suptitle("Answerability Accuracy by Product Category and Pipeline", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.08, 1, 0.93])
-    _save(fig, "6b_category_answerability")
+    _save(fig, "7_category_answerability")
 
 
 # ---------------------------------------------------------------------------
@@ -772,7 +776,7 @@ def _load_qbucket_metrics() -> tuple[pd.DataFrame, list[str]] | None:
     return qbucket, bucket_order
 
 
-def figure_7a_qbucket_f1() -> None:
+def figure_8_qbucket_f1() -> None:
     """RQ4 question-length Token F1 (1x4 across k)."""
     loaded = _load_qbucket_metrics()
     if loaded is None:
@@ -818,10 +822,10 @@ def figure_7a_qbucket_f1() -> None:
     _legend_below(fig, handles, labels, ncol=5)
     fig.suptitle("Token F1 by Question Length and Pipeline", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.08, 1, 0.93])
-    _save(fig, "7a_qbucket_f1")
+    _save(fig, "8_qbucket_f1")
 
 
-def figure_7b_qbucket_answerability() -> None:
+def figure_9_qbucket_answerability() -> None:
     """RQ4 question-length Answerability Accuracy (1x4 across k)."""
     loaded = _load_qbucket_metrics()
     if loaded is None:
@@ -855,13 +859,13 @@ def figure_7b_qbucket_answerability() -> None:
     _legend_below(fig, handles, labels, ncol=5)
     fig.suptitle("Answerability Accuracy by Question Length and Pipeline", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.08, 1, 0.93])
-    _save(fig, "7b_qbucket_answerability")
+    _save(fig, "9_qbucket_answerability")
 
 
 # ---------------------------------------------------------------------------
 # 8 - Answerability Outcomes Across Pipelines and k
 # ---------------------------------------------------------------------------
-def figure_8_answerability_outcomes() -> None:
+def figure_10_answerability_outcomes() -> None:
     """Stacked answerability outcome counts by pipeline and k."""
     answerability = _read_csv(OUTPUT_DIR / "answerability_metrics.csv")
     if answerability is None:
@@ -928,13 +932,13 @@ def figure_8_answerability_outcomes() -> None:
     _legend_below(fig, handles, labels, ncol=4)
     fig.suptitle("Answerability Outcomes Across Pipelines and Retrieval Depths", fontsize=15, fontweight="bold")
     fig.tight_layout(rect=[0, 0.10, 1, 0.94])
-    _save(fig, "8_answerability_outcomes")
+    _save(fig, "10_answerability_outcomes")
 
 
 # ---------------------------------------------------------------------------
 # 9 - Hallucination Rate by Pipeline and k
 # ---------------------------------------------------------------------------
-def figure_9_hallucination_rate() -> None:
+def figure_11_hallucination_rate() -> None:
     """Grouped bar chart for Hallucination Rate by pipeline and k."""
     hallucination = _read_csv(OUTPUT_DIR / "hallucination_metrics.csv")
     if hallucination is None:
@@ -980,7 +984,7 @@ def figure_9_hallucination_rate() -> None:
             )
 
     fig.tight_layout()
-    _save(fig, "9_hallucination_rate")
+    _save(fig, "11_hallucination_rate")
 
 
 # ---------------------------------------------------------------------------
@@ -994,14 +998,282 @@ def main() -> None:
     figure_3_retrieval_quality_vs_k()
     figure_4_answer_quality_faithfulness_hallucination_vs_k()
     figure_5_latency_vs_k()
-    figure_6a_category_f1()
-    figure_6b_category_answerability()
-    figure_7a_qbucket_f1()
-    figure_7b_qbucket_answerability()
-    figure_8_answerability_outcomes()
-    figure_9_hallucination_rate()
+    figure_6_category_f1()
+    figure_7_category_answerability()
+    figure_8_qbucket_f1()
+    figure_9_qbucket_answerability()
+    figure_10_answerability_outcomes()
+    figure_11_hallucination_rate()
+    figure_12_significance_tests()
     LOGGER.info("figures written to %s", FIGURES_DIR)
 
+# ---------------------------------------------------------------------------
+# Statistical Significance Testing (Section 3.12)
+# ---------------------------------------------------------------------------
+from dataclasses import dataclass
+
+import scipy.stats as stats
+
+SIG_SEED = 42
+N_BOOTSTRAP = 10_000
+ALPHA = 0.05
+MARGINAL = 0.10
+
+# Primary metrics, keyed by the per-question column that holds them.
+SIG_METRICS: dict[str, str] = {
+    "faithfulness": "Faithfulness",
+    "recall_at_k": "Recall@K",
+    "answerability": "Answerability Accuracy",
+    "token_f1": "Token F1",
+}
+
+
+@dataclass
+class SigResult:
+    comparison: str
+    metric: str
+    delta: float
+    boot_p: float
+    wilcoxon_p: float
+    ci_low: float
+    ci_high: float
+    verdict: str
+
+
+def _paired_bootstrap(a: np.ndarray, b: np.ndarray) -> tuple[float, float, float, float]:
+    """Return observed delta, bootstrap p-value, and 95% CI bounds.
+
+    a and b are per-question scores for the same questions, in the same order.
+    """
+    rng = np.random.default_rng(SIG_SEED)
+    diff = a - b
+    delta = float(diff.mean())
+    idx = rng.integers(0, len(diff), size=(N_BOOTSTRAP, len(diff)))
+    boot = diff[idx].mean(axis=1)
+    # two-tailed p under H0 (mean diff = 0): centre the bootstrap distribution
+    # at zero, then measure how often a resample is at least as extreme as the
+    # observed delta. (Without centring, boot is centred on delta and the share
+    # is ~0.5 by construction.)
+    boot_centered = boot - delta
+    boot_p = float(np.mean(np.abs(boot_centered) >= abs(delta)))
+    ci_low, ci_high = (float(x) for x in np.percentile(boot, [2.5, 97.5]))
+    return delta, boot_p, ci_low, ci_high
+
+
+def _wilcoxon_p(a: np.ndarray, b: np.ndarray) -> float:
+    """Two-tailed Wilcoxon signed-rank p-value; ties (zero diffs) dropped."""
+    diff = a - b
+    nonzero = diff[diff != 0]
+    if nonzero.size == 0:
+        return 1.0
+    try:
+        return float(stats.wilcoxon(nonzero).pvalue)
+    except ValueError:
+        return 1.0
+
+
+def _verdict(boot_p: float, wil_p: float) -> str:
+    if boot_p < ALPHA and wil_p < ALPHA:
+        return "significant"
+    if boot_p < MARGINAL or wil_p < MARGINAL:
+        return "marginal"
+    return "not significant"
+
+
+def _paired_scores(
+    per_q: pd.DataFrame, pipe_a: str, pipe_b: str, k: int, metric_col: str
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Align two pipelines on the same question ids at a given k."""
+    a = per_q[(per_q["pipeline"] == pipe_a) & (per_q["k"] == k)][["qid", metric_col]]
+    b = per_q[(per_q["pipeline"] == pipe_b) & (per_q["k"] == k)][["qid", metric_col]]
+    merged = a.merge(b, on="qid", suffixes=("_a", "_b")).dropna()
+    if merged.empty:
+        return None
+    return merged[f"{metric_col}_a"].to_numpy(), merged[f"{metric_col}_b"].to_numpy()
+
+
+def build_per_question_scores() -> pd.DataFrame | None:
+    """Assemble per_question_scores.csv from the step18 per-question JSONL files.
+
+    The significance tests need one row per (pipeline, k, question) with the
+    metric columns in SIG_METRICS. That data lives in
+    outputs/per_question/<pipeline>_k<k>_seed<seed>.jsonl (token_f1 and
+    faithfulness are stored directly; answerability and recall_at_k are derived
+    here). Writes outputs/per_question_scores.csv and returns the frame.
+    """
+    jsonl_paths = sorted((OUTPUT_DIR / "per_question").glob("*_seed*.jsonl"))
+    if not jsonl_paths:
+        LOGGER.warning("no per_question/*.jsonl files found; cannot build scores")
+        return None
+
+    rows: list[dict] = []
+    for path in jsonl_paths:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            k = int(record["k"])
+            evidence = record.get("evidence_doc_id")
+            retrieved = record.get("retrieved_doc_ids") or []
+            answerable = bool(record.get("is_answerable"))
+            refused = bool(record.get("refused"))
+            rows.append(
+                {
+                    "pipeline": record["pipeline"],
+                    "k": k,
+                    # record_id is stable per question across pipelines.
+                    "qid": record.get("record_id") or record.get("golden_id"),
+                    "token_f1": record.get("token_f1"),
+                    "faithfulness": record.get("faithfulness"),
+                    # Answerability accuracy outcome (matches step19a definition).
+                    "answerability": float(answerable != refused),
+                    # Single-evidence recall; undefined (NaN) for unanswerable rows.
+                    "recall_at_k": (
+                        recall_at_k(retrieved, evidence, k)
+                        if evidence not in (None, "")
+                        and not (isinstance(evidence, float) and pd.isna(evidence))
+                        else float("nan")
+                    ),
+                }
+            )
+
+    scores = pd.DataFrame(rows)
+    out_path = OUTPUT_DIR / "per_question_scores.csv"
+    scores.to_csv(out_path, index=False)
+    LOGGER.info("wrote %s (%d rows)", out_path, len(scores))
+    return scores
+
+
+def compute_significance_tests() -> pd.DataFrame | None:
+    """Run the Section 3.12 comparisons and write significance_tests.csv.
+
+    Expects a per-question file with columns:
+        pipeline, k, qid, and the metric columns in SIG_METRICS.
+    """
+    per_q = _read_csv(OUTPUT_DIR / "per_question_scores.csv")
+    if per_q is None:
+        per_q = build_per_question_scores()
+    if per_q is None:
+        LOGGER.warning("per_question_scores.csv not found; skipping significance tests")
+        return None
+
+    required = {"pipeline", "k", "qid"}
+    if not _has_required_columns(per_q, required, "significance_tests"):
+        return None
+
+    # Comparisons mapped to the Section 3.12 scope. Edit pipelines/k to match
+    # the optimal-k conclusions reported in Chapter 5.
+    comparisons: list[tuple[str, str, str, int]] = [
+        ("BM25 vs Hybrid (k=10)", "bm25", "hybrid", 10),
+        ("BM25 vs Dense (k=10)", "bm25", "dense", 10),
+        ("BM25 vs Parent-Child (k=10)", "bm25", "pc", 10),
+        ("BM25 k=1 vs k=10", "bm25", "bm25", 10),  # depth: handled below
+    ]
+
+    results: list[SigResult] = []
+    for label, pipe_a, pipe_b, k in comparisons:
+        for metric_col, metric_name in SIG_METRICS.items():
+            if metric_col not in per_q.columns:
+                continue
+            # Depth comparison (same pipeline, different k) is a special case.
+            if pipe_a == pipe_b:
+                a = per_q[(per_q["pipeline"] == pipe_a) & (per_q["k"] == 1)][["qid", metric_col]]
+                b = per_q[(per_q["pipeline"] == pipe_b) & (per_q["k"] == k)][["qid", metric_col]]
+                merged = a.merge(b, on="qid", suffixes=("_a", "_b")).dropna()
+                if merged.empty:
+                    continue
+                arr_a = merged[f"{metric_col}_a"].to_numpy()
+                arr_b = merged[f"{metric_col}_b"].to_numpy()
+            else:
+                pair = _paired_scores(per_q, pipe_a, pipe_b, k, metric_col)
+                if pair is None:
+                    continue
+                arr_a, arr_b = pair
+
+            delta, boot_p, ci_low, ci_high = _paired_bootstrap(arr_a, arr_b)
+            wil_p = _wilcoxon_p(arr_a, arr_b)
+            results.append(
+                SigResult(
+                    comparison=label,
+                    metric=metric_name,
+                    delta=delta,
+                    boot_p=boot_p,
+                    wilcoxon_p=wil_p,
+                    ci_low=ci_low,
+                    ci_high=ci_high,
+                    verdict=_verdict(boot_p, wil_p),
+                )
+            )
+
+    if not results:
+        LOGGER.warning("no significance results produced")
+        return None
+
+    out = pd.DataFrame([r.__dict__ for r in results])
+    # Bonferroni note: divide ALPHA by len(comparisons) when interpreting.
+    out.to_csv(OUTPUT_DIR / "significance_tests.csv", index=False)
+    LOGGER.info("wrote %s", OUTPUT_DIR / "significance_tests.csv")
+    return out
+
+
+def figure_12_significance_tests() -> None:
+    """Forest plot of differences with 95% bootstrap CIs (Section 3.12)."""
+    sig = compute_significance_tests()
+    if sig is None:
+        return
+
+    sig = sig.copy()
+    sig["row_label"] = sig["comparison"] + "  |  " + sig["metric"]
+    sig = sig.sort_values(["metric", "comparison"]).reset_index(drop=True)
+
+    verdict_color = {
+        "significant": OKABE_ITO["green"],
+        "marginal": OKABE_ITO["orange"],
+        "not significant": OKABE_ITO["grey"],
+    }
+
+    fig, ax = plt.subplots(figsize=(11, max(5, 0.5 * len(sig))))
+    y = np.arange(len(sig))
+
+    for i, row in sig.iterrows():
+        color = verdict_color[row["verdict"]]
+        ax.errorbar(
+            row["delta"],
+            i,
+            xerr=[[row["delta"] - row["ci_low"]], [row["ci_high"] - row["delta"]]],
+            fmt="o",
+            color=color,
+            ecolor=color,
+            elinewidth=1.6,
+            capsize=3,
+            markersize=7,
+        )
+
+    ax.axvline(0.0, color=OKABE_ITO["black"], linewidth=1.0, linestyle="--", alpha=0.7)
+    ax.set_yticks(y)
+    ax.set_yticklabels(sig["row_label"])
+    ax.set_xlabel("Difference between pipelines (95% bootstrap CI)")
+    ax.set_title(
+        "Statistical Significance of Main Pipeline Comparisons",
+        fontsize=15,
+        fontweight="bold",
+    )
+    ax.grid(axis="x", alpha=0.3)
+
+    legend_handles = [
+        plt.Line2D([0], [0], marker="o", color=verdict_color[v], linestyle="None", markersize=8, label=v.title())
+        for v in ("significant", "marginal", "not significant")
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.12),
+        ncol=len(legend_handles),
+        frameon=True,
+    )
+
+    fig.tight_layout()
+    _save(fig, "12_significance_tests")
 
 if __name__ == "__main__":
     main()
